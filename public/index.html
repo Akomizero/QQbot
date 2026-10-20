@@ -255,7 +255,7 @@
                 <p class="field-hint">语言代码，例如 zh-cn。</p>
               </div>
               <div class="settings-field settings-toggle">
-                <label for="model-retry-enabled"><input id="model-retry-enabled" type="checkbox" checked>模型暂时连接失败时自动补试</label><p class="field-hint">短暂断连、超时或服务繁忙时，稍等后补试一次（通常4秒）；同一条回复只发送一次。仍然失败才提示错误。</p>
+                <label for="model-retry-enabled"><input id="model-retry-enabled" type="checkbox" checked>模型暂时连接失败时自动补试</label><p class="field-hint">普通回复的每个模型步骤最多请求2次（首次加1次补试），空回复也共用这次补试机会；短暂断连或繁忙通常等待4秒，限流最多等待15秒，总时限60秒。关闭后仅请求1次。工具后续步骤、角色辨认和后台学习是独立任务；同一条回复只发送一次。</p>
               </div>
               <div class="settings-field"><label>最近模型请求诊断</label><button type="button" id="refresh-model-diagnostics" class="button button-quiet">查看最近诊断</button><p class="field-hint">失败提示中的诊断号可对应下方记录。仅保存错误类别、次数和耗时，不保存聊天正文、密钥或接口地址。</p><pre id="model-diagnostics" class="diagnostic-output" role="status">点击查看，不会调用模型。</pre></div>
               <div class="settings-field settings-toggle">

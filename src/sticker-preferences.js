@@ -34,12 +34,28 @@ export function saveStickerPreferences(groupId, rules, revision) {
   });
   data.groups[groupId] = state; write(data); return readStickerPreferences(groupId);
 }
+export function parseStickerRejection(text) {
+  if (typeof text !== "string") return null;
+  for (const clause of text.normalize("NFKC").slice(0, 3000).split(/[,，。！？!?；;\n]/u)) {
+    // Negating a dislike or a ban is not a request to suppress stickers.
+    if (/(?:不是不|并非不|没有不|不要钱|别(?:屏蔽|禁用|停用)|不要(?:屏蔽|禁用|停用))/u.test(clause)) continue;
+    const reverse = clause.match(/([^，。！？!?\n]{0,30}?)(?:的)?表情(?:包)?(?:我|你|咱们|大家|真的|实在|已经|都|就|也|\s){0,10}(?:不想(?:再)?(?:看到|看见|见到|收到|看|要)|不喜欢|不要(?:再(?:发|用|看到|出现)|了)|别(?:再)?(?:发|用|出现)|不用(?:再)?(?:发|用)|停用|禁止)/u);
+    const forward = /(?:别|不要|不用|不想|不喜欢|停用|禁止)[^，。！？!?\n]{0,30}表情/u.test(clause);
+    if (!reverse && !forward) continue;
+    const match = clause.match(/(?:别|不要|不用)(?:再|老是|一直)?(?:给我)?(?:发|用)(?:那个|这个|那张|这张)?\s*([^，。！？!?\n]{1,30}?)(?:的)?表情(?:包)?/u)
+      ?? clause.match(/(?:不喜欢|不想(?:再)?(?:看到|看见|看|要))(?:你)?(?:发|用)?\s*([^，。！？!?\n]{1,30}?)(?:的)?表情(?:包)?/u);
+    const term = (match?.[1] ?? reverse?.[1] ?? "").trim().replace(/的$/u, "")
+      .replace(/^(?:这|那)(?:个|张|些|种|类|款|套)?\s*/u, "").replace(/(?:这个|那个)$/u, "").trim();
+    return { term: term && !/^(?:它|你|你的|我|我的|所有|全部|任何|一切|任何人)$/u.test(term) ? term : null };
+  }
+  return null;
+}
 export function noteStickerFeedback(groupId, text, quotedStickerId) {
   if (!validGroup(groupId) || typeof text !== "string" || text.length > 400) return null;
-  if (!/(?:别|不要|不想|不喜欢|停用|禁止).{0,30}(?:发|用|表情)/u.test(text)) return null;
+  const rejection = parseStickerRejection(text);
+  if (!rejection) return null;
   const data = load(), state = stateFor(data, groupId);
-  const explicitTerm = (text.match(/(?:别|不要)(?:再|老是|一直)?(?:给我)?(?:发|用)(?:那个|这个|那张|这张)?\s*([^，。！？!?\n]{1,30}?)(?:的)?表情(?:包)?/u)
-    ?? text.match(/(?:不喜欢|不想(?:看到|看|要))(?:你)?(?:发|用)?\s*([^，。！？!?\n]{1,30}?)(?:的)?表情(?:包)?/u))?.[1]?.trim().replace(/的$/u, "");
+  const explicitTerm = rejection.term;
   const target = explicitTerm && !/^(?:这|那|这个|那个|这张|那张|这类|那类|这种|那种|它|你|你的|所有|全部|任何|一切|任何人)$/u.test(explicitTerm) ? { kind: "term", value: explicitTerm }
     : validSticker(quotedStickerId) ? { kind: "sticker", value: quotedStickerId } : null;
   if (!target) return null;

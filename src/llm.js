@@ -11,6 +11,7 @@ import { extractBilibiliReference, readBilibiliVideo, videoEvidenceText } from "
 import { understandImageCharacters, characterInspectionInstruction, characterReplyInstruction } from "./character-vision.js";
 import { wantsIllustratedReply, illustratedReplyInstruction } from "./illustrated-reply.js";
 import { conversationTargetInstruction } from "./message-context.js";
+import { parseStickerRejection } from "./sticker-preferences.js";
 
 const timeoutMs = 60_000;
 const maxConcurrentRequests = 2;
@@ -197,9 +198,10 @@ function collectSearchResults(existing, incoming) {
   return [...byUrl.values()].slice(0, maxAutomaticSearchResults);
 }
 
-async function requestCompletionOnce({ apiKey, settings, messages, tools = null, maxTokens = settings.maxTokens, emptyRetry = true }) {
+async function requestCompletionOnce({ apiKey, settings, messages, tools = null, maxTokens = settings.maxTokens, emptyRetry = true, retryState }) {
   let response;
-  const requestSignal = AbortSignal.timeout(timeoutMs);
+  const requestSignal = retryState.signal;
+  retryState.attempts += 1;
   try {
     response = await fetchModel(settings.apiEndpoint, {
       method: "POST",
@@ -216,7 +218,9 @@ async function requestCompletionOnce({ apiKey, settings, messages, tools = null,
       }),
       signal: requestSignal,
       redirect: "error",
-      modelRetries: settings.modelRetryEnabled !== false,
+      // This layer owns the shared retry budget; transport must not multiply it.
+      modelRetries: false,
+      modelAttempt: retryState.attempts,
     });
   } catch (error) {
     if (requestSignal.aborted || error?.name === "TimeoutError" || error?.name === "AbortError") {
@@ -268,8 +272,11 @@ async function requestCompletionOnce({ apiKey, settings, messages, tools = null,
     const code = unfinished ? "TOOLS_UNFINISHED" : !choice ? "EMPTY_CHOICES" : truncated ? "TRUNCATED" : "EMPTY_TEXT";
     recordModelDiagnostic(unfinished ? "tools" : truncated ? "truncated" : "empty", { code });
     // Keep this outside JSON parsing: a retry failure must retain its real error category.
-    if (emptyRetry && settings.modelRetryEnabled !== false) return requestCompletionOnce({ apiKey, settings, messages: [...messages, { role: "user", content: "请根据已有材料直接给出简短、完整的最终回复。" }],
-      tools: unfinished ? null : tools, maxTokens: Math.min(4096, Math.max(maxTokens, 2048)), emptyRetry: false });
+    if (emptyRetry && retryState.attempts < retryState.limit && !requestSignal.aborted) {
+      recordModelDiagnostic("retry", { code });
+      return requestCompletionOnce({ apiKey, settings, messages: [...messages, { role: "user", content: "请根据已有材料直接给出简短、完整的最终回复。" }],
+        tools: unfinished ? null : tools, maxTokens: Math.min(4096, Math.max(maxTokens, 2048)), emptyRetry: false, retryState });
+    }
     if (!text || unfinished) throw new LlmRequestError(unfinished ? "模型的工具处理未能完成，请稍后再试。" : `模型未返回文字答复${emptyRetry ? "" : "，补试后仍未完成"}，请稍后再试。`, { code });
     if (truncated) payload.choices[0].message.content = text + "\n\n（本次回复受到长度限制，可能尚未展开完整。）";
   }
@@ -279,14 +286,21 @@ async function requestCompletionOnce({ apiKey, settings, messages, tools = null,
 }
 
 async function requestCompletion(options) {
-  try { return await requestCompletionOnce(options); }
+  const retryState = { attempts: 0, limit: options.settings.modelRetryEnabled === false ? 1 : 2, signal: AbortSignal.timeout(timeoutMs) };
+  const attemptOptions = { ...options, retryState };
+  try { return await requestCompletionOnce(attemptOptions); }
   catch (error) {
-    if (!(error instanceof LlmRequestError) || !error.retryable || options.settings.modelRetryEnabled === false) throw error;
+    if (!(error instanceof LlmRequestError) || !error.retryable || retryState.attempts >= retryState.limit || retryState.signal.aborted) throw error;
     const delay = error.retryDelayMs;
     recordModelDiagnostic("retry", { code: error.code });
     console.warn(`模型回答暂未成功，${Math.ceil(delay / 1000)}秒后自动补试一次。`);
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    try { return await requestCompletionOnce(options); }
+    await new Promise((resolve, reject) => {
+      const onAbort = () => { clearTimeout(timer); reject(new LlmRequestError("模型请求超时了，请稍后再试。", { code: "TIMEOUT" })); };
+      const timer = setTimeout(() => { retryState.signal.removeEventListener("abort", onAbort); resolve(); }, delay);
+      retryState.signal.addEventListener("abort", onAbort, { once: true });
+      if (retryState.signal.aborted) onAbort();
+    });
+    try { return await requestCompletionOnce(attemptOptions); }
     catch (retryError) {
       if (!(retryError instanceof LlmRequestError) || !retryError.retryable) throw retryError;
       console.warn("模型回答自动补试后仍未成功。");
@@ -360,6 +374,7 @@ async function getLlmReplyInternal({
     }
   }
 
+  let videoMaterialsRead = false;
   try {
     let summaryResult = null;
     if (summaryIntent) {
@@ -410,6 +425,8 @@ async function getLlmReplyInternal({
       onVideoStart();
       try { videoResult = await readBilibiliVideo(videoReference, settings); }
       catch (error) { return { reply: error.message, status: "video-error" }; }
+      videoMaterialsRead = true;
+      recordModelDiagnostic("tools", { code: "VIDEO_MATERIAL_READY", phase: "video" });
       imageDataUrls.push(...videoResult.frames.map((frame) => frame.dataUrl));
     }
 
@@ -467,7 +484,7 @@ async function getLlmReplyInternal({
       && settings.searchEnabled;
     let availableStickers = [];
     if (!proactive && !summaryResult && !illustratedDiscussion && settings.stickersEnabled !== false
-      && !/(?:别|不要|不用|不想|不喜欢).{0,30}表情/u.test(String(userMessage))) {
+      && !parseStickerRejection(userMessage)) {
       try { availableStickers = stickerChoices(groupId ? `group:${groupId}` : senderQQId ? `private:${senderQQId}` : userId); } catch {}
     }
     const tools = automaticSearchEnabled ? [automaticSearchTool, bilibiliSearchTool] : [];
@@ -543,6 +560,8 @@ async function getLlmReplyInternal({
               try {
                 onVideoStart();
                 const video = await readBilibiliVideo(typeof args?.video === "string" ? args.video : "", settings);
+                videoMaterialsRead = true;
+                recordModelDiagnostic("tools", { code: "VIDEO_MATERIAL_READY", phase: "video" });
                 toolContent = videoEvidenceText(video);
                 videoFrames.push(...video.frames);
               } catch (error) { toolContent = error.message; }
@@ -634,6 +653,9 @@ async function getLlmReplyInternal({
           articles: searchResults.map(({title,url})=>({title,url})), sourceText } };
     }
     return { reply: reply ? appendSources(reply, searchResults) : null, stickerId: selectedStickerId, status: "ok", groupPersonaRevision: settings.groupPersonaRevision };
+  } catch (error) {
+    if (videoMaterialsRead && error instanceof LlmRequestError) error.message = "视频素材已经读到，但生成回复时遇到问题：" + error.message;
+    throw error;
   } finally {
     releaseRequestSlot();
   }
