@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "commands": [
+    {
+      "id": "help",
+      "name": "帮助",
+      "aliases": ["菜单", "help", "指令"],
+      "type": "text",
+      "reply": "可用指令：\n{{commands}}\n\n在群里 @机器人 后发送指令即可。"
+    },
+    {
+      "id": "ping",
+      "name": "ping",
+      "aliases": [],
+      "type": "text",
+      "reply": "pong 🏓"
+    },
+    {
+      "id": "time",
+      "name": "时间",
+      "aliases": ["现在几点", "time"],
+      "type": "time",
+      "reply": "现在是 {{time}}"
+    },
+    {
+      "id": "dice",
+      "name": "骰子",
+      "aliases": ["roll", "dice"],
+      "type": "dice",
+      "reply": "🎲 {{dice}}"
+    },
+    {
+      "id": "echo",
+      "name": "重复",
+      "aliases": ["echo"],
+      "type": "echo",
+      "reply": "{{input}}"
+    }
+  ]
+}

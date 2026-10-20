@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f4f7f5">
+    <title>QQ 群机器人 · 管理面板</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="QQ 群机器人管理首页">
+          <span class="brand-mark" aria-hidden="true">Q</span>
+          <span>群聊机器人</span>
+        </a>
+        <div class="topbar-actions">
+          <span class="local-badge"><span class="online-dot"></span>仅本机可访问</span>
+          <button class="button button-quiet" id="admin-logout" type="button" hidden>退出登录</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="auth-panel" class="settings-panel auth-panel" aria-label="管理员身份验证" hidden>
+          <div class="settings-heading">
+            <div>
+              <p class="eyebrow">LOCAL ADMIN</p>
+              <h2 id="auth-title">设置管理员密码</h2>
+              <p id="auth-description">首次使用请设置至少 12 个字符的强密码。密码只提交给本机服务端，由服务端计算并保存哈希。</p>
+            </div>
+          </div>
+          <form id="setup-form" class="auth-form" hidden>
+            <div class="settings-field">
+              <label for="setup-password">管理员密码</label>
+              <input id="setup-password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
+            </div>
+            <div class="settings-field">
+              <label for="setup-password-confirm">确认管理员密码</label>
+              <input id="setup-password-confirm" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
+            </div>
+            <div class="form-error" id="auth-error" role="alert" hidden></div>
+            <button class="button button-primary" type="submit">设置密码并进入</button>
+          </form>
+          <form id="login-form" class="auth-form" hidden>
+            <div class="settings-field">
+              <label for="login-password">管理员密码</label>
+              <input id="login-password" type="password" maxlength="256" autocomplete="current-password" required>
+            </div>
+            <div class="form-error" id="login-error" role="alert" hidden></div>
+            <button class="button button-primary" type="submit">登录</button>
+          </form>
+        </section>
+        <div id="management-content" hidden>
+        <section class="intro">
+          <div>
+            <p class="eyebrow">BOT CONTROL ROOM</p>
+            <h1>QQ 机器人管理</h1>
+            <p class="lede" id="page-description">常用开关放在前面，其他设置按功能收起。</p>
+          </div>
+          <button class="button button-primary" id="add-command" type="button">
+            <span aria-hidden="true">＋</span> 新建指令
+          </button>
+        </section>
+
+        <section class="notice" aria-label="隐私说明">
+          <span class="notice-icon" aria-hidden="true">⌂</span>
+          <p><strong>本地管理</strong><span>管理页和 NapCat WebSocket 桥接只绑定在这台电脑的回环地址。密钥只允许写入，不会从服务端回显。</span></p>
+        </section>
+
+        <nav class="management-nav" aria-label="管理功能" role="tablist">
+          <button type="button" role="tab" data-page="chat">聊天设置</button>
+          <button type="button" role="tab" data-page="personas">分群人设</button>
+          <button type="button" role="tab" data-page="knowledge">知识库</button>
+          <button type="button" role="tab" data-page="stickers">表情包</button>
+          <button type="button" role="tab" data-page="access">群与权限</button>
+          <button type="button" role="tab" data-page="commands">快捷指令</button>
+        </nav>
+
+        <section class="settings-panel" id="page-access" data-management-page="access" role="tabpanel" aria-label="OneBot 接入和消息接收白名单">
+          <div class="settings-heading">
+            <div>
+              <p class="eyebrow">MESSAGE ACCESS</p>
+              <h2>OneBot 连接与接收范围</h2>
+              <p>群消息只在白名单群内处理；主动聊天开启时会观察普通文字，明确 @机器人时会及时回复。好友私聊仅在 QQ 号名单内处理。白名单外、非数字 ID 和未知消息类型都会静默拒绝。</p>
+            </div>
+            <div class="key-statuses" aria-live="polite">
+              <span id="onebot-status" class="key-status">NapCat OneBot 未连接</span>
+            </div>
+          </div>
+          <p class="field-hint">NapCat 网络配置请添加 WebSocket 客户端：<code id="onebot-endpoint">ws://127.0.0.1:16700/onebot/v11/ws</code>。令牌由服务端从 .env 读取；管理页不会返回令牌。</p>
+          <form id="access-control-form">
+            <div class="access-grid">
+              <div class="settings-field">
+                <label for="allowed-group-ids">允许接收群消息的群号</label>
+                <textarea id="allowed-group-ids" rows="4" maxlength="100000" placeholder="每行一个群号" spellcheck="false"></textarea>
+                <p class="field-hint">群内回复对全体成员可见；明确 @机器人会及时触发回复，主动聊天开启时普通文字也会进入短期上下文。</p>
+              </div>
+              <div class="settings-field">
+                <label for="allowed-user-ids">允许好友私聊的 QQ 号</label>
+                <textarea id="allowed-user-ids" rows="4" maxlength="100000" placeholder="每行一个 QQ 号" spellcheck="false"></textarea>
+                <p class="field-hint">此名单仅授权好友私聊。可用换行或逗号分隔。</p>
+              </div>
+            </div>
+            <div class="form-error" id="access-control-error" role="alert" hidden></div>
+            <div class="settings-actions">
+              <p class="field-hint">每项填写真实数字 QQ 号或群号。白名单保存在本机 data/，重复项会自动去重。</p>
+              <button class="button button-primary" type="submit">保存接收范围</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="workspace" id="page-commands" data-management-page="commands" role="tabpanel" aria-label="指令列表和编辑器">
+          <div class="list-panel">
+            <div class="section-heading">
+              <div><h2>已配置指令</h2><p id="command-count">正在读取…</p></div>
+              <span class="live-indicator"><span class="online-dot"></span>实时生效</span>
+            </div>
+            <div id="command-list" class="command-list" aria-live="polite"></div>
+            <div id="empty-state" class="empty-state" hidden>
+              <div class="empty-icon" aria-hidden="true">⌘</div>
+              <h3>还没有指令</h3>
+              <p>创建一条指令，让机器人在群里回应你。</p>
+              <button class="button button-secondary" data-action="new" type="button">新建第一条指令</button>
+            </div>
+          </div>
+
+          <aside id="editor-panel" class="editor-panel" aria-label="指令编辑器">
+            <div class="editor-heading">
+              <span class="editor-icon" aria-hidden="true">✎</span>
+              <div><h2 id="editor-title">选择一条指令</h2><p id="editor-subtitle">点击左侧指令进行编辑，或新建一条。</p></div>
+            </div>
+            <form id="command-form" hidden>
+              <input id="command-id" type="hidden">
+              <label for="command-name">指令名称</label>
+              <div class="input-prefix"><span>@机器人</span><input id="command-name" maxlength="32" autocomplete="off" placeholder="例如：欢迎" required></div>
+              <p class="field-hint">群里发送这个词即可触发；不要输入斜杠或空格。</p>
+
+              <label for="command-aliases">别名 <span class="optional">选填</span></label>
+              <input id="command-aliases" autocomplete="off" placeholder="例如：hello, hi, 你好">
+              <p class="field-hint">用逗号分隔多个写法，别名也会触发这条指令。</p>
+
+              <label for="command-type">回复方式</label>
+              <select id="command-type">
+                <option value="text">固定文本</option>
+                <option value="time">当前时间</option>
+                <option value="dice">随机骰子</option>
+                <option value="echo">重复输入内容</option>
+              </select>
+              <p id="type-hint" class="field-hint type-hint">可在回复内容里使用 {{input}} 插入用户输入。</p>
+
+              <label for="command-reply">回复内容</label>
+              <textarea id="command-reply" rows="7" maxlength="4000" placeholder="机器人收到指令后发送的内容" required></textarea>
+              <p class="field-hint">支持 {{input}}、{{time}}、{{dice}} 和 {{commands}} 占位符。</p>
+
+              <div class="form-error" id="form-error" role="alert" hidden></div>
+              <div class="form-actions">
+                <button class="button button-primary" id="save-command" type="submit">保存指令</button>
+                <button class="button button-quiet" id="cancel-edit" type="button">取消</button>
+                <button class="button button-danger-text" id="delete-command" type="button" hidden>删除</button>
+              </div>
+            </form>
+          </aside>
+        </section>
+
+        <section class="settings-panel" id="page-chat" data-management-page="chat" role="tabpanel" aria-label="AI 模型设置">
+          <div class="settings-heading">
+            <div>
+              <p class="eyebrow">AI CHAT</p>
+              <h2>自然语言回复</h2>
+              <p>@机器人或白名单好友私聊时，未命中已有指令的文字会交给模型；主动聊天开启时，白名单群的普通文字会在话轮结束后由模型判断是否接话。</p>
+            </div>
+            <div class="key-statuses">
+              <span id="api-key-status" class="key-status">正在检查模型 API key…</span>
+              <span id="tavily-key-status" class="key-status">正在检查网页搜索 key…</span>
+            </div>
+          </div>
+          <form id="llm-settings-form">
+            <div class="settings-grid">
+              <div class="settings-field settings-model">
+                <label for="llm-model">当前模型</label>
+                <select id="llm-model" required></select>
+                <div class="model-list-actions">
+                  <button class="button button-quiet" id="refresh-models" type="button">刷新模型列表</button>
+                  <span id="model-list-status" role="status">尚未查询模型列表；当前配置会保持不变。</span>
+                </div>
+                <p class="field-hint">列表由本机服务端使用已配置的 key 查询，浏览器不会接触 key。选择后点击下方“保存模型设置”才会生效。</p>
+              </div>
+              <div class="settings-field settings-prompt">
+                <label for="llm-api-endpoint">模型 API 接口地址</label>
+                <input id="llm-api-endpoint" type="url" maxlength="500" autocomplete="url" spellcheck="false" required>
+                <p class="field-hint">OpenAI-compatible Chat Completions 地址。使用 HTTPS；仅本机地址允许 HTTP。</p>
+              </div>
+              <div class="settings-field settings-prompt">
+                <label for="llm-api-key">模型 API key（只写入，不会显示已有值）</label>
+                <input id="llm-api-key" type="password" maxlength="2048" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="留空表示保持当前 key">
+                <p class="field-hint">如需更换，在此输入新 key 后保存。清除复选框会删除本机配置中的模型 key。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="clear-llm-api-key"><input id="clear-llm-api-key" type="checkbox">清除当前模型 API key</label>
+              </div>
+              <div class="settings-field settings-prompt">
+                <label for="llm-personality">默认个性 / 私聊人设</label>
+                <textarea id="llm-personality" rows="3" maxlength="1000" required></textarea>
+                <p class="field-hint">用于私聊和新群模板；已开启独立人设的群在「分群人设」中修改。</p>
+              </div>
+              <div class="settings-field settings-toggle"><label for="nickname-trigger-enabled"><input id="nickname-trigger-enabled" type="checkbox">提到昵称也回复</label></div>
+              <div class="settings-field settings-prompt"><label for="bot-aliases">默认昵称呼唤词</label><input id="bot-aliases" maxlength="250" placeholder="大肥鱼、肥鱼、鱼鱼"><p class="field-hint">用逗号或顿号分隔。独立人设的群使用本群呼唤词。同一群或私聊按顺序排队，实际回复至少间隔 10 秒。</p></div>
+              <div class="settings-field settings-prompt">
+                <label for="llm-expression-style">表达风格</label>
+                <div class="preset-actions" aria-label="表达风格快捷预设">
+                  <button class="preset-button" type="button" data-style-preset="网友聊天">追加“网友聊天”</button>
+                  <button class="preset-button" type="button" data-style-preset="角色扮演">追加“角色扮演”</button>
+                </div>
+                <textarea id="llm-expression-style" rows="3" maxlength="1000" required></textarea>
+                <p class="field-hint">设置说话节奏和回答边界。群内事实、关系和固定梗请放进下方长期记忆。</p>
+              </div>
+              <div class="settings-field settings-prompt">
+                <label for="llm-memory">默认记忆 / 私聊常识</label>
+                <textarea id="llm-memory" rows="4" maxlength="4000"></textarea>
+                <p class="field-hint">这些内容会作为独立的背景上下文提供给模型，不代表机器人亲历或核实过；不会改变白名单或实际权限。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="knowledge-enabled"><input id="knowledge-enabled" type="checkbox">启用本地知识库检索</label>
+                <p class="field-hint">匹配相关网梗与互动资料，每次只提供相关片段。开关立即保存。</p>
+              </div>
+              <div class="settings-field settings-prompt">
+                <label for="llm-system-prompt">默认系统提示词</label>
+                <textarea id="llm-system-prompt" rows="4" maxlength="4000" required></textarea>
+              <p class="field-hint">在这里设置基础身份与保密边界；个性、表达风格和长期记忆会作为不同系统上下文单独传入。模型 API key 由服务端写入本机 .env。</p>
+              </div>
+              <div class="settings-field">
+                <label for="llm-temperature">Temperature</label>
+                <input id="llm-temperature" type="number" min="0" max="2" step="0.1" required>
+              </div>
+              <div class="settings-field">
+                <label for="llm-max-tokens">最大回复 tokens</label>
+                <input id="llm-max-tokens" type="number" min="1" max="4096" step="1" required>
+              </div>
+              <div class="settings-field">
+                <label for="search-provider">首选网页搜索服务</label>
+                <select id="search-provider" required>
+                  <option value="tavily">Tavily Search</option>
+                </select>
+                <p class="field-hint">首选 Tavily；失败或无结果时自动尝试 Exa，再尝试 B站视频。备用通道不使用 Tavily key。</p>
+              </div>
+              <div class="settings-field">
+                <label for="search-country">搜索地区</label>
+                <input id="search-country" maxlength="64" required>
+                <p class="field-hint">Tavily 地区名称，例如 china。</p>
+              </div>
+              <div class="settings-field">
+                <label for="search-language">搜索语言</label>
+                <input id="search-language" maxlength="20" required>
+                <p class="field-hint">语言代码，例如 zh-cn。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="model-retry-enabled"><input id="model-retry-enabled" type="checkbox" checked>模型暂时连接失败时自动补试</label><p class="field-hint">短暂断连、超时或服务繁忙时，稍等后补试一次（通常4秒）；同一条回复只发送一次。仍然失败才提示错误。</p>
+              </div>
+              <div class="settings-field"><label>最近模型请求诊断</label><button type="button" id="refresh-model-diagnostics" class="button button-quiet">查看最近诊断</button><p class="field-hint">失败提示中的诊断号可对应下方记录。仅保存错误类别、次数和耗时，不保存聊天正文、密钥或接口地址。</p><pre id="model-diagnostics" class="diagnostic-output" role="status">点击查看，不会调用模型。</pre></div>
+              <div class="settings-field settings-toggle">
+                <label for="long-reply-forward-enabled"><input id="long-reply-forward-enabled" type="checkbox" checked>长回复使用合并转发卡片</label>
+                <p class="field-hint">群聊和私聊的长回复折叠进一张卡片，点击展开阅读；保留完整文字和随附表情。短回复照常发送。保存后生效。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="detailed-discussion-enabled"><input id="detailed-discussion-enabled" type="checkbox" checked>复杂问题展开分析与讨论</label>
+                <p class="field-hint">分析、对比或讨论时说明判断依据、前提、反例和不确定之处；允许更长回答。普通闲聊和主动接话仍然简短，说“一句话”或“只要结论”时收短。保存后生效。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="content-summary-enabled"><input id="content-summary-enabled" type="checkbox" checked>读取网页并总结内容</label>
+                <p class="field-hint">支持新闻、公告、文章、教程、技术资料和游戏更新。例如“肥鱼，帮我总结近期 AI 新闻”“总结这篇文章＋链接”，或“/总结 主题或链接”。也可以直接贴文字要求总结，无需联网。网页和主题检索需要开启联网搜索；会核对原文的发布日期、更新日期并显示日期依据。“今天、近期、最新”资讯只采用日期可核对且符合时间范围的来源；日期缺失或冲突时明确说明，不把检索时间当发布日期。需要登录或限制访问的页面可改为贴原文。</p>
+              </div>
+              <div class="settings-field">
+                <label for="summary-output">总结默认发送方式</label>
+                <select id="summary-output"><option value="forward">长回复 / 合并转发卡片</option><option value="illustrated">图文长图（分区卡片）</option></select>
+                <p class="field-hint">图文采用深色卡片：先给一句话结论，再按主题展示编号要点、强调框和分色步骤；来源与日期单独放在末尾，链接可复制。单次说“图文版”或“文字版”可覆盖默认方式；普通分析也可说“用图文版分析这个问题”。长回复沿用折叠开关，排版失败时回退完整文字。保存后生效。</p>
+              </div>
+              <div class="settings-field">
+                <label for="long-reply-threshold">长回复折叠阈值（字）</label>
+                <input id="long-reply-threshold" type="number" min="100" max="3000" step="1" value="500" required>
+                <p class="field-hint">达到这个字数时折叠，默认 500，可设为 100～3000。NapCat 明确拒绝卡片时改用普通消息。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="search-enabled"><input id="search-enabled" type="checkbox">启用联网搜索与备用通道</label>
+                <p class="field-hint">模型会判断是否联网，也支持「/搜索 问题」。可直接说“在B站找某个视频”；结果附来源链接。视频搜索返回标题和简介，理解视频内容需开启下方功能。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="vision-enabled"><input id="vision-enabled" type="checkbox">启用图片识别</label>
+                <p class="field-hint">需在 NapCat 启用 enableLocalFile2Url。支持 JPG、PNG、WebP 和 GIF 表情；动态表情转成首帧识别。机器人通过 OneBot get_image 读取 Base64，并限制大小、数量和像素。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="character-recognition-enabled"><input id="character-recognition-enabled" type="checkbox" checked>加强动漫与游戏角色辨认</label>
+                <p class="field-hint">先辨认角色再自然接话，优先核对发饰、服装标志等特征；结合已确认的角色参考，避免只凭发色猜人。新图可能多等一会儿；不能确认时会说明，不保证所有新角色或二创都能认出。需要开启图片识别。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="conversation-followup-enabled"><input id="conversation-followup-enabled" type="checkbox">识别群友在和我讲话，自然接话</label>
+                <p class="field-hint">最近对话中，群友追问、回答或引用 bot 时，即使不 @ 也会结合上下文判断是否回复；不确定对象时保持安静。仅授权群，最多参考近15分钟20条文字，保存在内存；实际回复至少间隔10秒。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="video-understanding-enabled"><input id="video-understanding-enabled" type="checkbox">启用B站视频理解与观后感</label>
+                <p class="field-hint">发「肥鱼 看看这个视频 BV号，说说观后感」或B站视频链接。读取实际字幕、语音和关键画面，默认只说几句感受；不会凭标题假装看完。公开匿名访问，部分视频受平台或登录限制。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="video-asr-enabled"><input id="video-asr-enabled" type="checkbox">无字幕时使用本地语音转写</label>
+                <p class="field-hint">使用本机 CPU，可能需要数分钟；人名、方言和背景音乐可能识别不准。临时音轨处理后删除。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="video-frames-enabled"><input id="video-frames-enabled" type="checkbox">结合视频关键画面</label>
+                <p class="field-hint">均匀取样最多6帧交给当前视觉模型，需开启图片识别。抽样画面不能代表完整动态过程，回复会说明材料局限。</p>
+              </div>
+              <div class="settings-field">
+                <label for="video-max-minutes">视频音轨与画面处理上限（分钟）</label><input id="video-max-minutes" type="number" min="1" max="30" step="1" value="10" required>
+                <p class="field-hint">默认10分钟。更长的视频仍可读取可用字幕；无字幕时请发短片段。每次回复最多读取一个视频。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="proactive-chat-enabled"><input id="proactive-chat-enabled" type="checkbox">启用群聊主动聊天</label>
+                <p class="field-hint">默认开启。只观察当前群白名单中的普通文字；本机内存最多保留最近 15 分钟、每群 20 条消息。消息停顿到设定时间后，模型结合上下文和人设判断是否接话，也可自然延续或开启话题；多数时候可选择沉默。不会每条消息都调用模型。关闭后会停止观察并清空内存上下文。图片、命令和 @ 消息不进入主动聊天上下文。</p>
+              </div>
+              <div class="settings-field">
+                <label for="proactive-cooldown-minutes">每群主动发言冷却（分钟）</label>
+                <input id="proactive-cooldown-minutes" type="number" min="10" max="1440" step="1" required>
+                <p class="field-hint">每群至少 10 分钟；默认 10 分钟。</p>
+              </div>
+              <div class="settings-field settings-toggle"><label for="proactive-pause-when-ignored"><input id="proactive-pause-when-ignored" type="checkbox">主动发言没人回应时，暂时安静</label><p class="field-hint">主动发言后等待接话；若 5 分钟仍无人回应，安静约 1 小时。@、昵称呼唤、引用回复或明显接上话题可提前恢复，不影响被呼唤时及时回复。</p></div>
+              <div class="settings-field">
+                <label for="proactive-frequency-minutes">主动判断最小间隔（分钟）</label>
+                <input id="proactive-frequency-minutes" type="number" min="1" max="1440" step="1" required>
+                <p class="field-hint">避免频繁请求模型；默认每群至少间隔 5 分钟。</p>
+              </div>
+              <div class="settings-field">
+                <label for="proactive-debounce-seconds">聊天停顿多久后判断（秒）</label>
+                <input id="proactive-debounce-seconds" type="number" min="5" max="60" step="1" required>
+                <p class="field-hint">将连续消息合并成一轮；可设 5 到 60 秒，默认 8 秒。</p>
+              </div>
+              <div class="settings-field">
+                <label for="proactive-daily-limit">每群每日主动判断/发言上限</label>
+                <input id="proactive-daily-limit" type="number" min="1" max="24" step="1" required>
+                <p class="field-hint">可设 1 到 24 次；默认每群每天最多 3 次模型判断，也因此最多发 3 条主动消息。</p>
+              </div>
+            </div>
+            <div class="form-error" id="llm-settings-error" role="alert" hidden></div>
+            <div class="settings-actions">
+              <p class="field-hint" id="local-config-check" role="status" aria-live="polite">本地检查只验证接口格式和 key 配置状态，不会向模型服务发送请求。</p>
+              <div class="settings-action-buttons">
+                <button class="button button-secondary" id="check-local-config" type="button">检查本地配置</button>
+                <button class="button button-primary" type="submit">保存模型设置</button>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <section class="settings-panel" id="page-personas" data-management-page="personas" role="tabpanel" aria-label="分群人设">
+          <div class="settings-heading"><div><p class="eyebrow">GROUP PERSONAS</p><h2>分群人设</h2><p>为每个授权群分别设置角色、说话方式、昵称和记忆。普通回复、自然接话与主动聊天都会使用所在群的人设。</p></div></div>
+          <div class="settings-field persona-selector"><label for="persona-group">选择群</label><select id="persona-group"></select><p class="field-hint" id="persona-status" role="status">正在读取群人设…</p></div>
+          <p class="field-hint" id="persona-empty" hidden>还没有授权群。先到「群与权限」添加群号，再来设置人设。</p>
+          <form id="group-persona-form" hidden>
+            <div class="settings-grid">
+              <div class="settings-field"><label for="persona-label">群备注</label><input id="persona-label" maxlength="60" placeholder="例如：游戏群，只用于管理页区分"></div>
+              <div class="settings-field settings-toggle"><label for="persona-enabled"><input id="persona-enabled" type="checkbox" checked>这个群使用独立人设</label><p class="field-hint">关闭后跟随「聊天设置」中的默认模板；已有独立内容仍会保留。</p></div>
+            </div>
+            <fieldset id="persona-values">
+              <div class="settings-grid">
+                <div class="settings-field"><label for="persona-aliases">本群昵称呼唤词</label><input id="persona-aliases" maxlength="220" placeholder="用顿号或逗号分隔，例如：肥鱼、鱼鱼"><p class="field-hint">开启昵称回复时，只使用这个群配置的呼唤词。</p></div>
+                <div class="settings-field"><label for="persona-personality">本群个性 / 人设</label><textarea id="persona-personality" rows="5" maxlength="1000" required></textarea></div>
+                <div class="settings-field settings-prompt"><label for="persona-style">本群表达风格</label><textarea id="persona-style" rows="3" maxlength="1000" required></textarea></div>
+              </div>
+              <details class="settings-group"><summary>本群长期记忆与系统提示</summary><div class="settings-grid">
+                <div class="settings-field"><label for="persona-memory">本群长期记忆</label><textarea id="persona-memory" rows="5" maxlength="4000" placeholder="只在这个群使用的角色背景、互动偏好和常识"></textarea><p class="field-hint">留空表示这个群没有额外记忆，不会读取其他群的人设或记忆。群聊知识库仍按来源群隔离。</p></div>
+                <div class="settings-field"><label for="persona-system-prompt">本群系统提示</label><textarea id="persona-system-prompt" rows="5" maxlength="4000" required></textarea><p class="field-hint">更换角色名称时请同步调整这里的身份描述。实际权限、隐私要求和图片检查由程序统一控制。</p></div>
+              </div></details>
+            </fieldset>
+            <p id="persona-error" class="form-error" role="alert" hidden></p>
+            <div class="form-actions"><button type="submit" class="button button-primary" id="save-persona">保存这个群的人设</button><button type="button" class="button button-quiet" id="reset-persona">撤销修改</button><button type="button" class="button button-quiet" id="copy-default-persona">从默认模板填入</button></div>
+            <p class="field-hint">保存只影响当前选中的群。新群复制默认模板并从空白群记忆开始；首次迁移保留现有群的人设。</p>
+          </form>
+        </section>
+
+        <section class="settings-panel" id="page-knowledge" data-management-page="knowledge" role="tabpanel" aria-label="本地知识库">
+          <div class="settings-heading">
+            <div><p class="eyebrow">KNOWLEDGE</p><h2>本地知识库</h2><p>每个群独立积累和检索知识，手动添加也只属于当前选中的群；私聊资料另行维护。命中片段会提供给当前模型。</p></div>
+            <div><button class="button button-quiet" id="extract-knowledge" type="button">立即提炼</button><button class="button button-secondary" id="add-knowledge" type="button">添加知识</button></div>
+          </div>
+          <div class="settings-field"><label for="knowledge-group">选择知识库所属群</label><select id="knowledge-group" aria-label="选择知识库所属群"><option value="">正在读取…</option></select><p class="field-hint">切换后只显示本群条目、积累状态和试搜结果。保存或提炼不会改动其他群的知识。</p></div>
+          <div id="knowledge-switches" class="feature-switches">
+            <div class="settings-field settings-toggle"><label for="knowledge-learning-enabled"><input id="knowledge-learning-enabled" type="checkbox">从群友聊天中积累知识</label><p class="field-hint">明确解释网梗、说“记住”或表达娱乐偏好，单人也可形成待确认候选；多人支持时自动启用。普通聊天会合并提炼，最多每群 5 分钟一次、每天 12 次。模型断连时保留短期缓冲重试，不保存原图或原始聊天记录。</p></div>
+          </div>
+          <p id="knowledge-learning-status" class="field-hint" role="status">正在读取积累状态…</p>
+          <button type="button" class="button button-quiet" id="show-knowledge-candidates">查看待确认知识</button>
+          <div class="knowledge-filters"><input id="knowledge-filter" placeholder="找标题、关键词或正文…" aria-label="筛选知识"><select id="knowledge-origin-filter" aria-label="知识来源"><option value="all">全部知识</option><option value="manual">手动添加</option><option value="learned">群聊已学会</option><option value="candidate">待确认</option><option value="rejected">已拒绝</option></select></div>
+          <p class="field-hint" id="knowledge-count" role="status">正在读取…</p>
+          <div class="knowledge-grid">
+            <div id="knowledge-list" class="command-list"></div>
+            <form id="knowledge-form" class="knowledge-editor" hidden>
+              <input id="knowledge-id" type="hidden">
+              <p id="knowledge-source" class="field-hint"></p>
+              <div class="settings-field"><label for="knowledge-title">标题</label><input id="knowledge-title" maxlength="120" placeholder="例如：某个网梗的名字" required></div>
+              <div class="settings-field"><label for="knowledge-tags">关键词 / 别名</label><input id="knowledge-tags" placeholder="用逗号分隔，例如：别名、缩写、适用话题"><p class="field-hint">把群友常说的简称和近义词写在这里，更容易检索到。</p></div>
+              <div class="settings-field"><label for="knowledge-content">正文</label><textarea id="knowledge-content" rows="9" maxlength="12000" placeholder="含义或背景：&#10;适用场景：&#10;自然回复示例：&#10;不适用的场景：&#10;来源或更新时间（选填）：" required></textarea></div>
+              <div class="settings-field settings-toggle"><label for="knowledge-entry-enabled"><input id="knowledge-entry-enabled" type="checkbox" checked>使用这条知识</label></div>
+              <div class="form-actions"><button class="button button-primary" type="submit">保存知识</button><button class="button button-quiet" id="cancel-knowledge" type="button">取消</button></div>
+            </form>
+          </div>
+          <form id="knowledge-search-form" class="knowledge-preview-form">
+            <div class="settings-field"><label for="knowledge-query">试搜已保存的知识</label><input id="knowledge-query" maxlength="1000" placeholder="输入一句群友可能会问的话" required></div>
+            <button class="button button-secondary" type="submit">试搜</button>
+          </form>
+          <p class="field-hint">试搜只在本机检索，不调用模型或联网搜索。保存条目后即可使用，无需重启。</p>
+          <pre id="knowledge-results" class="knowledge-results" role="status" hidden></pre>
+        </section>
+
+        <section class="settings-panel" id="page-stickers" data-management-page="stickers" role="tabpanel" aria-label="表情包库">
+          <div class="settings-heading"><div><p class="eyebrow">STICKERS</p><h2>表情包库</h2><p>上传常用表情，或让 bot 从群友发来的表情中学习收藏，合适时随回复发一张。</p></div><div><button class="button button-quiet" id="refresh-stickers" type="button">刷新列表</button><button class="button button-secondary" id="add-sticker" type="button">上传表情</button></div></div>
+          <div class="feature-switches settings-field settings-toggle"><label for="stickers-enabled"><input id="stickers-enabled" type="checkbox">允许 bot 在回复中发表情包</label><p class="field-hint">自动配图最多每条一张、同一会话至少间隔 30 秒；只从已启用且检查通过的表情里选择。明确斗图请求仍遵守 10 秒回复间隔。开关立即保存。</p></div>
+          <div class="feature-switches settings-field settings-toggle"><label for="sticker-learning-enabled"><input id="sticker-learning-enabled" type="checkbox">从群友的表情中自动学习收藏</label><p class="field-hint">授权群里发来的 GIF、QQ 图片表情，即使不 @ 也会择合适的收藏、命名和标注情绪；不收藏普通照片。每群至少间隔 2 分钟、每天最多判断 12 次，会额外调用当前模型。学来的表情只在原群使用，可在下方停用或删除。大动图会压缩，过长时只收藏静态首帧。开关立即保存。</p></div>
+          <p class="field-hint">收藏前检查内容，过滤血腥、排泄物、腐烂污物等令人反胃的图片；动图检查全部帧。检查失败时不收藏、不发送。已有表情会补查，待检查期间暂停使用。</p>
+          <p class="field-hint">接梗规则：呼唤肥鱼并发「token来」和图片，会回「token回」并复用原图；原图也需通过内容检查。</p>
+          <p id="sticker-count" class="field-hint" role="status">正在读取…</p>
+          <details class="settings-group" open><summary>本群表情使用偏好</summary><div class="settings-field"><label for="sticker-preference-group">选择群</label><select id="sticker-preference-group"></select><p class="field-hint">群友说“别发某某表情”会形成待确认偏好，并临时避开15分钟；管理员确认后持续禁用，只影响本群。自动选图还会避开10分钟内最近使用的3张。</p><div id="sticker-preference-rules" class="preference-rules"></div><div class="form-actions"><input id="sticker-block-term" maxlength="30" placeholder="本群不使用的角色或关键词" aria-label="禁用表情关键词"><button type="button" class="button button-quiet" id="add-sticker-block-term">添加本群禁用词</button></div></div></details>
+          <div class="knowledge-grid">
+            <div id="sticker-list" class="sticker-list"></div>
+            <form id="sticker-form" class="knowledge-editor" hidden>
+              <input id="sticker-id" type="hidden">
+              <div class="settings-field"><label for="sticker-file">图片 / 动图</label><input id="sticker-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif"><p class="field-hint">JPG / PNG / WebP / GIF 每张最多 20 MB，表情库总量 60 MB。手动上传保留原文件和 GIF 动画；识图时会另行缩小。</p></div>
+              <img id="sticker-preview" class="sticker-preview" alt="待上传的表情预览" hidden>
+              <div class="settings-field"><label for="sticker-title">表情名称</label><input id="sticker-title" maxlength="80" placeholder="例如：疑惑猫猫" required></div>
+              <div class="settings-field"><label for="sticker-tags">情绪 / 适用场景</label><input id="sticker-tags" placeholder="例如：疑惑, 听不懂, 问号"></div>
+              <div class="settings-field"><label for="sticker-usage">什么时候用</label><textarea id="sticker-usage" rows="2" maxlength="240" placeholder="留空让 bot 看图学习；例如：群友分享成果时俏皮地夸奖"></textarea></div>
+              <div class="settings-field"><label for="sticker-avoid">什么时候避免用</label><textarea id="sticker-avoid" rows="2" maxlength="160" placeholder="例如：严肃求助、悲伤倾诉、争执时"></textarea><p class="field-hint">保存时会一起记住情绪、适用场景和避免场景，回复时结合上下文选择。用途尚未学好时暂不自动发送。</p></div>
+              <div class="settings-field settings-toggle"><label for="sticker-entry-enabled"><input id="sticker-entry-enabled" type="checkbox" checked>启用这张表情</label></div>
+              <div class="form-actions"><button class="button button-primary" type="submit">保存表情</button><button class="button button-quiet" id="cancel-sticker" type="button">取消</button></div>
+            </form>
+          </div>
+        </section>
+
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+        </div>
+      </main>
+      <footer><span>QQ 群机器人管理面板</span><span>指令与模型设置保存在本地 data/</span></footer>
+    </div>
+  </body>
+</html>

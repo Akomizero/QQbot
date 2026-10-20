@@ -1,0 +1,15 @@
+node_modules/
+.local/
+.env*
+!.env.example
+data/*
+!data/*.example.json
+backups/
+publish/
+.venv/
+__pycache__/
+*.log
+*.tmp
+*.zip
+*.incomplete
+*.sha256
