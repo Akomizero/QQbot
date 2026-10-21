@@ -72,6 +72,7 @@
           <button type="button" role="tab" data-page="chat">聊天设置</button>
           <button type="button" role="tab" data-page="personas">分群人设</button>
           <button type="button" role="tab" data-page="knowledge">知识库</button>
+          <button type="button" role="tab" data-page="visual">角色记忆</button>
           <button type="button" role="tab" data-page="members">成员印象</button>
           <button type="button" role="tab" data-page="stickers">表情包</button>
           <button type="button" role="tab" data-page="access">群与权限</button>
@@ -402,6 +403,27 @@
           </form>
         </section>
 
+        <section class="settings-panel" id="page-visual" data-management-page="visual" role="tabpanel" aria-label="角色视觉记忆">
+          <div class="settings-heading"><div><p class="eyebrow">VISUAL MEMORY</p><h2>角色视觉记忆</h2><p>把角色纠正关联到具体图片。群友标注先待确认，确认后才用于识图；相似图片仍只作参考，不保证认出同角色的所有新图。</p></div><button type="button" class="button button-quiet" id="refresh-visual">刷新角色记忆</button></div>
+          <div class="settings-grid">
+            <div class="settings-field"><label for="visual-group">选择角色记忆所属群</label><select id="visual-group"></select><p class="field-hint">群友纠正仅属于来源群。「通用管理员参考」会用于所有群，请明确区分。</p></div>
+            <div class="settings-field settings-toggle"><label for="visual-memory-learning-enabled"><input id="visual-memory-learning-enabled" type="checkbox">从群友角色纠正中生成待确认候选</label><p class="field-hint">可附一张图说「这个是鸣潮的达妮娅」，或引用图片纠正；也可在本人发图后3分钟内说明。已有库存表情可引用bot发出的表情纠正。多人多图不明确时不自动绑定。需开启识图和角色辨认。</p></div>
+          </div>
+          <p class="field-hint" role="status" id="visual-status">正在读取…</p>
+          <div class="knowledge-filters"><input id="visual-filter" placeholder="搜索角色、作品或特征…" aria-label="筛选角色记忆"><select id="visual-filter-status" aria-label="角色记忆状态"><option value="all">全部状态</option><option value="candidate">待确认</option><option value="confirmed">已确认</option><option value="disabled">已停用</option><option value="rejected">已拒绝</option></select></div>
+          <div class="knowledge-grid"><div id="visual-list" class="command-list"></div>
+            <form id="visual-form" class="knowledge-editor" hidden>
+              <h3>编辑角色标注</h3><p class="field-hint">只确认虚构角色；编辑不会改变对应的图片或来源群。</p>
+              <div class="settings-field"><label for="visual-name">角色名</label><input id="visual-name" maxlength="60" required></div>
+              <div class="settings-field"><label for="visual-work">作品名</label><input id="visual-work" maxlength="80" placeholder="确认启用时必填"></div>
+              <div class="settings-field"><label for="visual-traits">可见特征，每行一条</label><textarea id="visual-traits" rows="5" required placeholder="填写2至8条服装、发饰等特征"></textarea></div>
+              <div class="settings-field"><label for="visual-entry-status">使用状态</label><select id="visual-entry-status"><option value="candidate">待确认，不用于识图</option><option value="confirmed">确认并启用</option><option value="disabled">停用</option><option value="rejected">拒绝此标注</option></select></div>
+              <div class="form-actions"><button class="button button-primary" type="submit">保存角色记忆</button><button class="button button-quiet" id="cancel-visual" type="button">取消</button></div>
+            </form>
+          </div>
+          <p class="field-hint">只保存通过内容检查的低清预览、图像指纹、角色标注与来源指纹，不保存完整原图或聊天记录。未确认的纠正不会覆盖已确认标注；不识别真人身份。</p>
+        </section>
+
         <section class="settings-panel" id="page-knowledge" data-management-page="knowledge" role="tabpanel" aria-label="本地知识库">
           <div class="settings-heading">
             <div><p class="eyebrow">KNOWLEDGE</p><h2>本地知识库</h2><p>每个群独立积累和检索知识，手动添加也只属于当前选中的群；私聊资料另行维护。命中片段会提供给当前模型。</p></div>
@@ -409,7 +431,7 @@
           </div>
           <div class="settings-field"><label for="knowledge-group">选择知识库所属群</label><select id="knowledge-group" aria-label="选择知识库所属群"><option value="">正在读取…</option></select><p class="field-hint">切换后只显示本群条目、积累状态和试搜结果。保存或提炼不会改动其他群的知识。</p></div>
           <div id="knowledge-switches" class="feature-switches">
-            <div class="settings-field settings-toggle"><label for="knowledge-learning-enabled"><input id="knowledge-learning-enabled" type="checkbox">从群友聊天中积累知识</label><p class="field-hint">明确解释网梗、说“记住”或表达娱乐偏好，单人也可形成待确认候选；多人支持时自动启用。普通聊天会合并提炼，最多每群 5 分钟一次、每天 12 次。模型断连时保留短期缓冲重试，不保存原图或原始聊天记录。</p></div>
+            <div class="settings-field settings-toggle"><label for="knowledge-learning-enabled"><input id="knowledge-learning-enabled" type="checkbox">从群友聊天中积累知识</label><p class="field-hint">群友解释网梗、群内称呼或互动背景，单人也可形成待确认候选；个人喜好和日常对话观察显示在「成员印象」。普通聊天合并提炼，每群至少间隔5分钟，不再设每日12次上限。明确教学消息优先保留；断连会重试有效短期缓冲，不保存完整原始聊天记录。</p></div>
           </div>
           <p id="knowledge-learning-status" class="field-hint" role="status">正在读取积累状态…</p>
           <button type="button" class="button button-quiet" id="show-knowledge-candidates">查看待确认知识</button>

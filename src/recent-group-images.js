@@ -1,6 +1,7 @@
 import { isNapCatImageFile, MAX_IMAGE_COUNT } from "./image-input.js";
 import { groupMemberContextSince } from "./member-impressions.js";
 import { messageReferences } from "./message-context.js";
+import { isVisualCorrectionText } from "./visual-memory-store.js";
 
 // Store platform file identifiers only. Image bytes are obtained on demand through
 // the existing get_image / validation path, never saved as conversation memory.
@@ -52,7 +53,7 @@ export async function resolveRecentGroupImages({ event, groupId, selfId, text, s
       return imageEntry({ ...source, message_id: refs.replyIds[0] }, groupId, selfId, since, now, quoteTtl);
     } catch { return null; }
   }
-  if (!isImageFollowupText(text)) return null;
+  if (!isImageFollowupText(text) && !isVisualCorrectionText(text)) return null;
   const select = () => stateFor(groupId, now)?.entries.filter(entry => entry.userId === String(event.user_id)
     && entry.messageId !== String(event.message_id) && entry.at <= now && entry.at > cutoff(groupId, since)).at(-1) ?? null;
   const cached = select(); if (cached) return cached;

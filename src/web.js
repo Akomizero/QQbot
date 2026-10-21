@@ -26,6 +26,8 @@ import { readChatGptImageStatus } from "./chatgpt-imagegen.js";
 import { readVideoDiscoveryStatus } from "./video-discovery.js";
 import { readStickerPreferences, saveStickerPreferences } from "./sticker-preferences.js";
 import { readMemberImpressions, saveMemberImpression, forgetMemberImpression } from "./member-impressions.js";
+import { readVisualMemories, editVisualMemory } from "./visual-memory-store.js";
+import { visualLearningStatus } from "./visual-learning.js";
 
 const publicRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const assets = new Map([
@@ -450,6 +452,19 @@ export async function startManagementServer({
       return;
     }
 
+    if (url.pathname === "/api/visual-memory") {
+      try {
+        const body = request.method === "GET" ? null : await readJsonBody(request);
+        const requested = request.method === "GET" ? url.searchParams.get("groupId") : body?.groupId;
+        const groupId = requested === "global" ? null : knowledgeScope(requested ?? undefined, { useDefault: true });
+        if (request.method === "GET") sendJson(response, 200, { ...readVisualMemories(groupId), groupId, groups: readAccessControl().groupIds,
+          learningEnabled: readLlmSettings().visualMemoryLearningEnabled, learning: visualLearningStatus(groupId) });
+        else if (["PUT", "DELETE"].includes(request.method)) sendJson(response, 200, { ...editVisualMemory(groupId, body?.entry ?? {}, body?.revision, request.method === "DELETE"), groupId, message: "角色视觉记忆已保存，下一次识图生效。" });
+        else sendJson(response, 405, { error: "接口方法不支持。" });
+      } catch (error) { sendJson(response, error.statusCode ?? 400, { error: error.code ? "无法访问视觉记忆。" : error.message }); }
+      return;
+    }
+
     if (url.pathname === "/api/knowledge") {
       if (request.method === "GET") {
         try {
@@ -557,7 +572,7 @@ export async function startManagementServer({
     if (url.pathname === "/api/features" && request.method === "PATCH") {
       try {
         const body = await readJsonBody(request);
-        const allowed = ["knowledgeEnabled", "knowledgeLearningEnabled", "memberImpressionsEnabled", "memberImpressionsLearningEnabled", "stickersEnabled", "stickerLearningEnabled"];
+        const allowed = ["knowledgeEnabled", "knowledgeLearningEnabled", "memberImpressionsEnabled", "memberImpressionsLearningEnabled", "stickersEnabled", "stickerLearningEnabled", "visualMemoryLearningEnabled"];
         if (!body || !Object.keys(body).length || Object.entries(body).some(([key, value]) => !allowed.includes(key) || typeof value !== "boolean")) {
           sendJson(response, 400, { error: "功能开关格式不正确。" }); return;
         }

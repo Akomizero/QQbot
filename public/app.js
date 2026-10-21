@@ -71,6 +71,7 @@ const llmFields = {
   visionEnabled: document.querySelector("#vision-enabled"),
   chatgptImageGenerationEnabled: document.querySelector("#chatgpt-image-generation-enabled"),
   characterRecognitionEnabled: document.querySelector("#character-recognition-enabled"),
+  visualMemoryLearningEnabled: document.querySelector("#visual-memory-learning-enabled"),
   videoUnderstandingEnabled: document.querySelector("#video-understanding-enabled"),
   videoDiscoveryEnabled: document.querySelector("#video-discovery-enabled"),
   videoDiscoveryGroupIds: document.querySelector("#video-discovery-group-ids"),
@@ -432,6 +433,7 @@ llmSettingsForm.addEventListener("submit", async (event) => {
     memory: llmFields.memory.value,
     knowledgeEnabled: llmFields.knowledgeEnabled.checked,
     knowledgeLearningEnabled: llmFields.knowledgeLearningEnabled.checked,
+    visualMemoryLearningEnabled: llmFields.visualMemoryLearningEnabled.checked,
     memberImpressionsEnabled: llmFields.memberImpressionsEnabled.checked,
     memberImpressionsLearningEnabled: llmFields.memberImpressionsLearningEnabled.checked,
     stickersEnabled: llmFields.stickersEnabled.checked,
@@ -512,6 +514,7 @@ function setLlmSettings(settings) {
   llmFields.memory.value = settings.memory ?? "";
   llmFields.knowledgeEnabled.checked = settings.knowledgeEnabled !== false;
   llmFields.knowledgeLearningEnabled.checked = settings.knowledgeLearningEnabled !== false;
+  llmFields.visualMemoryLearningEnabled.checked = settings.visualMemoryLearningEnabled !== false;
   llmFields.memberImpressionsEnabled.checked = settings.memberImpressionsEnabled !== false;
   llmFields.memberImpressionsLearningEnabled.checked = settings.memberImpressionsLearningEnabled !== false;
   llmFields.stickersEnabled.checked = settings.stickersEnabled !== false;
@@ -633,6 +636,7 @@ function setAccessControl(accessControl) {
 async function loadManagementData() {
   await loadMemberImpressions();
   await loadKnowledge();
+  await loadVisualMemories();
   await loadStickers();
   await loadGroupPersonas();
   try {
@@ -969,13 +973,13 @@ async function loadKnowledge({ force = false } = {}) {
     knowledgeRevisionValue = data.revision;
     const states = data.learning?.groups ?? [];
     const buffered = states.reduce((sum, state) => sum + state.bufferedMessages, 0);
-    const outcomes = { waiting: "等待合并提炼", "waiting-context": "等待更多上下文", learning: "正在提炼", saved: "已保存或更新知识，请查看条目和待确认状态", "no-facts": "上次未发现新知识或与已有条目重复", "model-error": "提炼失败，有效短期缓冲会重试", "daily-limit": "今日提炼次数已用完", "missing-key": "服务端未配置模型密钥", filtered: "本次明确教学未进入提炼：内容过长或含不应保存的信息", "buffer-cleared": "服务重启或缓冲已清理，等待新的群消息", expired: "短期缓冲已到期，等待新消息" };
+    const outcomes = { waiting: "等待合并提炼", "waiting-context": "等待更多上下文", learning: "正在提炼", saved: "本轮知识已有新增或更新，请查看条目和待确认状态", "members-only": "本轮只更新了成员印象，没有新增群知识", "no-facts": "上次未发现新知识或与已有条目重复", "model-error": "提炼失败，有效短期缓冲会重试", "daily-limit": "旧版达到每日上限；新版已取消，等待新消息", "missing-key": "服务端未配置模型密钥", filtered: "本次明确教学未进入提炼：内容过长或含不应保存的信息", "buffer-cleared": "服务重启或缓冲已清理，等待新的群消息", expired: "短期缓冲已到期，等待新消息" };
     const latest = [...states].sort((a, b) => (b.lastAttemptAt || b.lastReceivedAt || 0) - (a.lastAttemptAt || a.lastReceivedAt || 0))[0];
     document.querySelector("#knowledge-learning-status").textContent = data.groupId === null ? "私聊资料由管理员手动维护，与所有群聊知识隔离。"
       : data.oneBotConnected === false ? "OneBot 未连接，暂时收不到群聊；本群已有知识仍保存在本机。"
-      : `群 ${data.groupId} · 当前缓冲 ${buffered} 条可积累消息${latest ? " · " + (outcomes[latest.outcome] ?? "正在观察") + (latest.lastAddedCount ? `（最近更新 ${latest.lastAddedCount} 条）` : "") : " · 等待本群群友解释网梗或表达互动偏好"}`;
+      : `群 ${data.groupId} · 当前缓冲 ${buffered} 条可积累消息${latest ? " · " + (outcomes[latest.outcome] ?? "正在观察") + `（知识新增/更新 ${latest.lastKnowledgeAddedCount ?? 0} 条，成员印象 ${latest.lastMemberAddedCount ?? 0} 条）` : " · 等待本群群友解释网梗或互动背景"}`;
     if (data.groupId !== null && latest) document.querySelector("#knowledge-learning-status").textContent +=
-      ` · 今日${latest.attemptsToday ?? 0}/12次` + (latest.lastSavedAt ? ` · 最近保存：${new Date(latest.lastSavedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}` : " · 尚无保存记录")
+      ` · 今日知识提炼${latest.attemptsToday ?? 0}次（无每日上限）` + (latest.lastKnowledgeSavedAt ? ` · 最近新增/更新知识：${new Date(latest.lastKnowledgeSavedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}` : " · 尚无新版知识保存时间记录")
       + (!buffered ? " · 原始聊天缓冲不跨重启保留，已有知识与状态会保留" : "");
     renderKnowledge();
   } catch (error) {
@@ -1205,7 +1209,7 @@ stickerForm.addEventListener("submit", async (event) => {
   finally { button.disabled = false; }
 });
 
-for (const key of ["knowledgeEnabled", "knowledgeLearningEnabled", "memberImpressionsEnabled", "memberImpressionsLearningEnabled", "stickersEnabled", "stickerLearningEnabled"]) {
+for (const key of ["knowledgeEnabled", "knowledgeLearningEnabled", "memberImpressionsEnabled", "memberImpressionsLearningEnabled", "stickersEnabled", "stickerLearningEnabled", "visualMemoryLearningEnabled"]) {
   llmFields[key].addEventListener("change", async () => {
     const checked = llmFields[key].checked;
     llmFields[key].disabled = true;
@@ -1333,8 +1337,95 @@ document.querySelector("#extract-member-impressions").addEventListener("click", 
   catch (error) { showToast(error.message, true); }
 });
 
+let visualData = { entries: [], revision: null }, visualScope;
+let visualDraft = null, visualSequence = 0;
+const visualForm = document.querySelector("#visual-form"), visualGroupSelect = document.querySelector("#visual-group");
+const visualStatusLabels = { candidate: "待确认", confirmed: "已确认并启用", disabled: "已停用", rejected: "已拒绝" };
+function openVisualEditor(entry) {
+  visualDraft = entry;
+  document.querySelector("#visual-name").value = entry.name;
+  document.querySelector("#visual-work").value = entry.work;
+  document.querySelector("#visual-traits").value = entry.traits.join("\n");
+  document.querySelector("#visual-entry-status").value = entry.status;
+  visualForm.hidden = false; document.querySelector("#visual-name").focus();
+}
+async function mutateVisual(entry, remove = false) {
+  const scope = visualScope, revision = visualData.revision;
+  visualGroupSelect.disabled = true;
+  try {
+    const data = await requestAdminApi("/api/visual-memory", { method: remove ? "DELETE" : "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ groupId: scope ?? "global", revision, entry }) });
+    if (scope === visualScope) { visualData = data; visualForm.hidden = true; visualDraft = null; await loadVisualMemories(); }
+    showToast(data.message);
+  } catch (error) { if (error.status === 409) { visualForm.hidden = true; await loadVisualMemories(); } throw error; }
+  finally { visualGroupSelect.disabled = false; }
+}
+function renderVisualMemories() {
+  const list = document.querySelector("#visual-list"), query = document.querySelector("#visual-filter").value.toLocaleLowerCase("zh-CN");
+  const status = document.querySelector("#visual-filter-status").value;
+  list.replaceChildren();
+  const entries = visualData.entries.filter(entry => (status === "all" || status === entry.status)
+    && `${entry.name} ${entry.work} ${entry.traits.join(" ")}`.toLocaleLowerCase("zh-CN").includes(query));
+  for (const entry of entries) {
+    const card = document.createElement("article"); card.className = "command-card";
+    if (/^data:image\/jpeg;base64,[a-zA-Z0-9+/=]+$/u.test(entry.preview ?? "")) {
+      const image = document.createElement("img"); image.src = entry.preview; image.alt = "对应图片的低清预览"; image.width = 160; image.loading = "lazy"; card.append(image);
+    }
+    const title = document.createElement("h3"); title.textContent = `${entry.name} · ${entry.work || "作品待补充"}`;
+    const info = document.createElement("p"); info.className = "field-hint"; info.textContent = `${visualStatusLabels[entry.status] ?? entry.status} · ${entry.groupId ? "仅本群" : "通用管理员参考"} · ${entry.evidenceRefs?.length ?? 0}条来源${entry.relatedStickerId ? " · 已关联库存表情" : ""}${entry.preview ? "" : " · 旧参考未保存预览"}`;
+    const traits = document.createElement("p"); traits.textContent = entry.traits.join("；");
+    card.append(title, info, traits);
+    if (entry.evidenceRefs?.length) {
+      const details = document.createElement("details"), label = document.createElement("summary"), refs = document.createElement("p");
+      label.textContent = "来源时间与指纹"; refs.className = "field-hint";
+      refs.textContent = entry.evidenceRefs.map(ref => `${new Date(ref.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })} · ${ref.hash.slice(0, 16)}`).join("\n");
+      details.append(label, refs); card.append(details);
+    }
+    const controls = document.createElement("div"); controls.className = "form-actions";
+    const actions = [["编辑", () => openVisualEditor(entry)]];
+    if (entry.status !== "confirmed") actions.push(["确认并启用", () => { if (!entry.work) { openVisualEditor(entry); showToast("请先补充作品名，再确认启用。", true); return; } return mutateVisual({ ...entry, status: "confirmed" }); }]);
+    if (entry.status === "confirmed") actions.push(["停用", () => mutateVisual({ ...entry, status: "disabled" })]);
+    if (entry.status === "candidate") actions.push(["拒绝", () => mutateVisual({ ...entry, status: "rejected" })]);
+    actions.push(["删除", () => { if (confirm("删除这条角色视觉记忆？已有备份不受影响。")) return mutateVisual(entry, true); }]);
+    for (const [label, action] of actions) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "button button-quiet"; button.textContent = label;
+      button.addEventListener("click", async () => { button.disabled = true; try { await action(); } catch (error) { showToast(error.message, true); } finally { button.disabled = false; } }); controls.append(button);
+    }
+    card.append(controls); list.append(card);
+  }
+  if (!entries.length) { const empty = document.createElement("p"); empty.className = "field-hint"; empty.textContent = "暂无符合条件的角色记忆。群友附图纠正后，候选会显示在这里。已有旧角色样例可切换到通用管理员参考查看。"; list.append(empty); }
+}
+async function loadVisualMemories() {
+  if (!visualForm.hidden) return;
+  const sequence = ++visualSequence;
+  try {
+    const data = await requestAdminApi("/api/visual-memory" + (visualScope === undefined ? "" : `?groupId=${encodeURIComponent(visualScope ?? "global")}`));
+    if (sequence !== visualSequence) return;
+    visualScope = data.groupId; visualData = data;
+    visualGroupSelect.replaceChildren(...[...data.groups.map(id => ({ value: id, text: `群 ${id}` })), { value: "global", text: "通用管理员参考（所有群）" }].map(item => { const option = document.createElement("option"); option.value = item.value; option.textContent = item.text; return option; }));
+    visualGroupSelect.value = visualScope ?? "global";
+    const learning = { waiting: "等待新的角色纠正", queued: "纠正处理已排队", extracting: "正在提取角色标注", "candidate-saved": "已保存待确认候选", duplicate: "已有相同标注，未重复添加", "no-correction": "没有可保存的明确角色纠正", "ambiguous-image": "图片不唯一，未自动绑定，请单独发图纠正", "unavailable-or-rejected": "本次内容检查或提炼未完成，未保存图片；可重新明确纠正" };
+    document.querySelector("#visual-status").textContent = `共${data.entries.length}条 · 待确认${data.entries.filter(entry => entry.status === "candidate").length}条 · 已启用${data.entries.filter(entry => entry.status === "confirmed").length}条 · ${learning[data.learning?.code] ?? "等待纠正"}${data.learningEnabled ? "" : " · 自动学习已关闭"}`;
+    renderVisualMemories();
+  } catch (error) { document.querySelector("#visual-status").textContent = error.message; }
+}
+visualGroupSelect.addEventListener("change", () => { visualScope = visualGroupSelect.value === "global" ? null : visualGroupSelect.value; visualForm.hidden = true; visualDraft = null; void loadVisualMemories(); });
+document.querySelector("#refresh-visual").addEventListener("click", () => { visualForm.hidden = true; void loadVisualMemories(); });
+document.querySelector("#visual-filter").addEventListener("input", renderVisualMemories);
+document.querySelector("#visual-filter-status").addEventListener("change", renderVisualMemories);
+document.querySelector("#cancel-visual").addEventListener("click", () => { visualForm.hidden = true; visualDraft = null; void loadVisualMemories(); });
+visualForm.addEventListener("submit", async event => {
+  event.preventDefault(); if (!visualDraft) return;
+  const button = visualForm.querySelector("button[type=submit]"); button.disabled = true;
+  try { await mutateVisual({ id: visualDraft.id, name: document.querySelector("#visual-name").value, work: document.querySelector("#visual-work").value,
+    traits: document.querySelector("#visual-traits").value.split("\n").map(x => x.trim()).filter(Boolean), status: document.querySelector("#visual-entry-status").value }); }
+  catch (error) { showToast(error.message, true); } finally { button.disabled = false; }
+});
+setInterval(() => { if (!managementContent.hidden && !document.querySelector("#page-visual").hidden && visualForm.hidden && !visualGroupSelect.disabled) void loadVisualMemories(); }, 10000);
+
 function setupNavigation() {
   const descriptions = { members: "从与AI的日常对话中逐步了解每位成员，显示初步观察、已形成印象及自动维护。", chat: "管理通用功能、模型连接和默认人设；各群角色在分群人设中单独配置。", personas: "选择一个群，分别设置个性、表达风格、昵称呼唤词和长期记忆。", knowledge: "积累群内网梗和互动背景，查看、确认或编辑学到的知识。", stickers: "放入常用表情，给它们标上情绪和适用场景。", access: "查看连接状态，设置哪些群和好友可以与 bot 互动。", commands: "管理固定指令，常用回复一键配置。" };
+  descriptions.visual = "管理群友纠正形成的角色视觉记忆，确认后用于所在群的后续识图。";
   const buttons = [...document.querySelectorAll(".management-nav [data-page]")];
   function showPage(page) {
     if (!Object.hasOwn(descriptions, page)) page = "chat";
@@ -1345,6 +1436,7 @@ function setupNavigation() {
     if (page === "members" && !managementContent.hidden && memberForm.hidden) void loadMemberImpressions().catch(error => showToast(error.message, true));
     if (page === "stickers" && !managementContent.hidden) void loadStickers();
     if (page === "knowledge" && !managementContent.hidden) void loadKnowledge();
+    if (page === "visual" && !managementContent.hidden) void loadVisualMemories();
     if (page === "personas" && !managementContent.hidden) void loadGroupPersonas();
     history.replaceState(null, "", `#${page}`);
   }

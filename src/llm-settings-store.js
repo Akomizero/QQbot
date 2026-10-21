@@ -38,6 +38,7 @@ export const DEFAULT_LLM_SETTINGS = {
   visionEnabled: true,
   chatgptImageGenerationEnabled: false,
   characterRecognitionEnabled: true,
+  visualMemoryLearningEnabled: true,
   videoUnderstandingEnabled: true,
   videoDiscoveryEnabled: false,
   videoDiscoveryGroupIds: [],
@@ -120,6 +121,7 @@ export function normalizeLlmSettings(settings) {
   const visionEnabled = settings.visionEnabled === undefined ? DEFAULT_LLM_SETTINGS.visionEnabled : settings.visionEnabled;
   const chatgptImageGenerationEnabled = settings.chatgptImageGenerationEnabled ?? DEFAULT_LLM_SETTINGS.chatgptImageGenerationEnabled;
   const characterRecognitionEnabled = settings.characterRecognitionEnabled ?? DEFAULT_LLM_SETTINGS.characterRecognitionEnabled;
+  const visualMemoryLearningEnabled = settings.visualMemoryLearningEnabled ?? DEFAULT_LLM_SETTINGS.visualMemoryLearningEnabled;
   const videoUnderstandingEnabled = settings.videoUnderstandingEnabled ?? DEFAULT_LLM_SETTINGS.videoUnderstandingEnabled;
   const videoDiscoveryEnabled = settings.videoDiscoveryEnabled ?? DEFAULT_LLM_SETTINGS.videoDiscoveryEnabled;
   const videoDiscoveryGroupIds = settings.videoDiscoveryGroupIds ?? DEFAULT_LLM_SETTINGS.videoDiscoveryGroupIds;
@@ -175,6 +177,7 @@ export function normalizeLlmSettings(settings) {
   if (typeof visionEnabled !== "boolean") throw new Error("图片识别开关必须是布尔值。");
   if (typeof chatgptImageGenerationEnabled !== "boolean") throw new Error("ChatGPT 网页生图开关必须是布尔值。");
   if (typeof characterRecognitionEnabled !== "boolean") throw new Error("角色辨认开关必须是布尔值。");
+  if (typeof visualMemoryLearningEnabled !== "boolean") throw new Error("角色纠正学习开关必须是布尔值。");
   if ([videoUnderstandingEnabled, videoAsrEnabled, videoFramesEnabled].some((value) => typeof value !== "boolean")) throw new Error("视频理解开关必须是布尔值。");
   if (typeof videoDiscoveryEnabled !== "boolean") throw new Error("自主浏览视频开关必须是布尔值。");
   if (!Array.isArray(videoDiscoveryGroupIds) || videoDiscoveryGroupIds.length > 128 || videoDiscoveryGroupIds.some(id => typeof id !== "string" || !/^\d{1,32}$/u.test(id))) throw new Error("视频分享群必须填写有效的数字群号。");
@@ -226,6 +229,7 @@ export function normalizeLlmSettings(settings) {
     visionEnabled,
     chatgptImageGenerationEnabled,
     characterRecognitionEnabled,
+    visualMemoryLearningEnabled,
     videoUnderstandingEnabled,
     videoDiscoveryEnabled,
     videoDiscoveryGroupIds: [...new Set(videoDiscoveryGroupIds)],

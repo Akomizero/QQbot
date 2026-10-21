@@ -18,6 +18,8 @@ try { const value = JSON.parse(readFileSync(statusFile, "utf8")); if (value?.ver
 function statusOf(state) {
   return { lastReceivedAt: state.lastReceivedAt ?? null, lastAttemptAt: state.lastAt || null, lastSavedAt: state.lastSavedAt ?? null,
     lastAddedCount: state.lastAddedCount ?? 0, lastMemberAddedCount: state.lastMemberAddedCount ?? 0, outcome: state.outcome ?? "waiting", attemptsToday: state.count ?? 0,
+    lastKnowledgeAddedCount: state.lastKnowledgeAddedCount ?? Math.max(0, (state.lastAddedCount ?? 0) - (state.lastMemberAddedCount ?? 0)),
+    lastKnowledgeSavedAt: state.lastKnowledgeSavedAt ?? null, lastProposedKnowledgeCount: state.lastProposedKnowledgeCount ?? 0,
     memberAttemptsToday: state.memberCount ?? state.memberAttemptsToday ?? 0, day: state.day ?? "" };
 }
 function persistStatus(groupId, state) {
@@ -129,8 +131,11 @@ export async function extractKnowledgeBatch(options) { return (await extractLear
 export function getKnowledgeLearningStatus() {
   const ids = new Set([...Object.keys(savedStatus), ...buffers.keys()]);
   const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
-  return { groups: [...ids].map(groupId => { const state = buffers.get(groupId), previous = state ? statusOf(state) : savedStatus[groupId]; return { groupId, ...previous,
-    outcome: !state && ["learning", "waiting", "waiting-context", "model-error"].includes(previous.outcome) ? "buffer-cleared" : previous.outcome,
+  return { groups: [...ids].map(groupId => { const state = buffers.get(groupId), previous = state ? statusOf(state) : savedStatus[groupId];
+    const knowledgeCount = previous.lastKnowledgeAddedCount ?? Math.max(0, (previous.lastAddedCount ?? 0) - (previous.lastMemberAddedCount ?? 0));
+    const outcome = previous.outcome === "saved" && !knowledgeCount && previous.lastMemberAddedCount > 0 ? "members-only" : previous.outcome;
+    return { groupId, ...previous, lastKnowledgeAddedCount: knowledgeCount,
+    outcome: !state && ["learning", "waiting", "waiting-context", "model-error"].includes(outcome) ? "buffer-cleared" : outcome,
     attemptsToday: previous.day === today ? previous.attemptsToday : 0, memberAttemptsToday: previous.day === today ? previous.memberAttemptsToday ?? 0 : 0,
     bufferedMessages: state?.messages.length ?? 0, bufferedMemberMessages: state?.messages.filter(message => message.memberEligible).length ?? 0, bufferRestored: false }; }) };
 }
@@ -164,7 +169,7 @@ async function evaluate(groupId, forced = false) {
     if (!state.messages.length) { if (state.outcome === "model-error") state.outcome = "expired"; return; }
     if (!forced && state.messages.length < 2 && !state.messages.some((message) => teachingCue.test(message.text) || message.memberEligible)) { state.outcome = "waiting-context"; return; }
     const hasMembers = membersOn && state.messages.some(message => message.memberEligible);
-    if ((!knowledgeOn || state.count >= 12) && !hasMembers) { state.outcome = knowledgeOn ? "daily-limit" : "waiting-context"; return; }
+    if (!knowledgeOn && !hasMembers) { state.outcome = "waiting-context"; return; }
     if (active || now - state.lastAt < intervalMs) { schedule(groupId, Math.max(30_000, intervalMs - (now - state.lastAt))); return; }
     const apiKey = getLlmApiKey();
     if (!apiKey) { state.outcome = "missing-key"; return; }
@@ -172,7 +177,7 @@ async function evaluate(groupId, forced = false) {
     acquired = true;
     state.lastAt = now;
     state.outcome = "learning";
-    knowledgeAttempt = knowledgeOn && state.count < 12;
+    knowledgeAttempt = knowledgeOn;
     memberAttempt = hasMembers;
     if (knowledgeAttempt) state.count += 1;
     if (memberAttempt) state.memberCount = (state.memberCount ?? 0) + 1;
@@ -184,9 +189,12 @@ async function evaluate(groupId, forced = false) {
       const knowledgeAdded = knowledgeAttempt && latest.knowledgeEnabled && latest.knowledgeLearningEnabled ? mergeLearnedKnowledge(groupId, candidates.knowledge) : 0;
       const memberAdded = latest.memberImpressionsEnabled !== false && latest.memberImpressionsLearningEnabled !== false ? mergeMemberImpressions(groupId, candidates.impressions) : 0;
       const added = knowledgeAdded + memberAdded;
-      state.outcome = added ? "saved" : "no-facts";
+      state.outcome = knowledgeAdded ? "saved" : memberAdded ? "members-only" : "no-facts";
       state.lastAddedCount = added;
+      state.lastKnowledgeAddedCount = knowledgeAdded;
+      state.lastProposedKnowledgeCount = candidates.knowledge.length;
       state.lastMemberAddedCount = memberAdded;
+      if (knowledgeAdded) state.lastKnowledgeSavedAt = Date.now();
       if (added) state.lastSavedAt = Date.now();
     }
   } catch {
@@ -198,7 +206,7 @@ async function evaluate(groupId, forced = false) {
   } finally {
     if (acquired) active = false;
     persistStatus(groupId, state);
-    if (state.messages.length) schedule(groupId, state.count >= 12 && !state.messages.some(message => message.memberEligible) ? ttlMs : 60_000);
+    if (state.messages.length) schedule(groupId, 60_000);
   }
 }
 
@@ -229,7 +237,12 @@ export function observeKnowledgeMessage({ groupId, userId, text, settings, messa
     relatedStickerId: /^[a-f\d-]{36}$/u.test(relatedStickerId ?? "") ? relatedStickerId : null });
   state.lastReceivedAt = now;
   if (!state.outcome || ["waiting-context", "daily-limit", "buffer-cleared"].includes(state.outcome)) state.outcome = "waiting";
-  if (state.messages.length > 40) state.messages.shift();
+  if (state.messages.length > 40) {
+    // Keep explicit explanations/corrections while ordinary chat fills the batch.
+    const teaching = state.messages.filter(message => teachingCue.test(message.text)).slice(-12);
+    const ordinary = state.messages.filter(message => !teaching.includes(message)).slice(-(40 - teaching.length));
+    state.messages = [...teaching, ...ordinary].sort((a, b) => a.at - b.at);
+  }
   persistStatus(groupId, state);
   schedule(groupId, teachingCue.test(text) ? 5000 : 60_000);
 }

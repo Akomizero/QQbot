@@ -28,7 +28,9 @@ import { enqueueReplyRecovery, startReplyRecovery, recoveryStillAllowed } from "
 import { parseSummaryIntent } from "./content-summary.js";
 import { startManagementServer } from "./web.js";
 import { observeKnowledgeMessage, clearKnowledgeLearning } from "./knowledge-learning.js";
-import { addLearnedSticker, approveStickerForSending, sendLlmResult } from "./sticker-store.js";
+import { addLearnedSticker, approveStickerForSending, sendLlmResult, readSticker } from "./sticker-store.js";
+import { queueVisualCorrection } from "./visual-learning.js";
+import { isVisualCorrectionText } from "./visual-memory-store.js";
 import { canLearnSticker, learnIncomingStickers, queuePendingStickerDescriptions, queueStickerDescription, stopStickerLearning } from "./sticker-learning.js";
 import { queueConversationReply, paceOneBotMessage } from "./reply-queue.js";
 import { sendReplyWithFolding } from "./long-reply.js";
@@ -528,7 +530,7 @@ async function handleMessage(event, { sendMessage }, config) {
       authorized.mentioned = true;
       authorized.followup = true;
     }
-    if (visionEnabled && authorized.mentioned && Array.isArray(event.message) && !hasForwardMessage(event.message) && !event.message.some(segment => segment?.type === "image")) {
+    if (visionEnabled && (authorized.mentioned || isVisualCorrectionText(authorized.content)) && Array.isArray(event.message) && !hasForwardMessage(event.message) && !event.message.some(segment => segment?.type === "image")) {
       authorized.imageReference = await resolveRecentGroupImages({ event, groupId: authorized.groupId, selfId: authorized.selfId,
         text: authorized.content, since: personaSince, sendAction: sendMessage });
       if (authorized.imageReference) authorized.messageContext.imageSource = {
@@ -539,6 +541,17 @@ async function handleMessage(event, { sendMessage }, config) {
     }
     if (followupEnabled || videoDiscoveryEnabled) rememberGroupLine({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content, messageId: event.message_id,
       name: event.sender?.card || event.sender?.nickname, addressedToBot: authorized.mentioned });
+    if (visionEnabled && isVisualCorrectionText(authorized.content) && !hasForwardMessage(event.message)
+      && !authorized.messageContext?.mentions.some(item => !item.isBot)) {
+      const correctionImages = authorized.imageReference?.images ?? imageSegments(event.message);
+      const relatedStickerId = authorized.messageContext?.reply?.stickerId;
+      if (correctionImages?.length || relatedStickerId) try {
+        queueVisualCorrection({ groupId: authorized.groupId, text: authorized.content, messageId: event.message_id,
+          sourceMessageId: authorized.imageReference?.messageId ?? event.message_id, relatedStickerId,
+          loadImages: async () => correctionImages?.length ? readIncomingImages(correctionImages, sendMessage)
+            : [await prepareNapCatImageBase64(readSticker(relatedStickerId, { approvedOnly: true }).bytes.toString("base64"), MAX_TOTAL_IMAGE_BYTES)] });
+      } catch {}
+    }
     if (authorized.mentioned) {
       cancelPendingGroupTurn(authorized.groupId);
       const context = passiveGroupContexts.get(authorized.groupId);
