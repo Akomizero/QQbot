@@ -4,7 +4,7 @@
 
 ## 后续实施
 
-本次调研之后已接入[记忆维护](memory-maintenance-20261022.md)与[按群性格成长](personality-growth-20261022.md)。下文候选和安装状态保留调研时点；实现及真实效果边界以各自专题记录为准。
+本次调研之后已接入[记忆维护](memory-maintenance-20261022.md)、[按群性格成长](personality-growth-20261022.md)与[摘要日期及关键说法核对](summary-verification-20261022.md)。下文候选和安装状态保留调研时点；实现及真实效果边界以各自专题记录为准。
 
 ## 结论
 

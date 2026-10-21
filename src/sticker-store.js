@@ -232,7 +232,9 @@ export async function sendLlmResult(result, destination, sendMessage, { stickers
     catch { console.warn("摘要图文排版未完成，改用完整文字卡片。"); }
   }
   if (summaryImages.length) {
-    const links = summary.articles.filter(article => article.url).map(article => article.url).join("\n");
+    const checkedIds=new Set((summary.verification?.claims??[]).flatMap(claim=>[...(claim.support??[]),...(claim.against??[])].map(item=>item.sourceId)));
+    const checkedSources=(summary.verification?.sources??[]).filter(source=>checkedIds.has(source.id));
+    const links = [...new Set([...summary.articles,...checkedSources].filter(article=>article.url).map(article=>article.url))].join("\n");
     message[0] = { type: "text", data: { text: `${summary.topic || summary.articles[0]?.game || "内容总结"}\n${links ? "详细内容见图，来源：\n" + links : summary.adapter === "discussion" ? "详细内容见图。" : "根据你提供的文字整理，详细摘要见图。"}` } };
     for (const bytes of summaryImages) message.push({ type: "image", data: { file: `base64://${bytes.toString("base64")}`, summary: "[内容摘要]" } });
   }

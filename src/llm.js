@@ -7,6 +7,7 @@ import { withModelOperation, modelOperationId, recordModelDiagnostic } from "./m
 import { settingsForGroup } from "./group-personas.js";
 import { needsDetailedDiscussion, detailedDiscussionInstruction } from "./discussion-style.js";
 import { parseSummaryIntent, readSummarySource, readSummaryPages, summaryEvidence, summaryHeader, contentSummaryInstruction, SummaryReadError } from "./content-summary.js";
+import { prepareSummaryVerification, finishSummaryVerification, summaryVerificationInstruction, summaryVerificationFooter } from "./summary-verification.js";
 import { extractBilibiliReference, readBilibiliVideo, videoEvidenceText } from "./bilibili-video.js";
 import { understandImageCharacters, characterInspectionInstruction, characterReplyInstruction } from "./character-vision.js";
 import { wantsIllustratedReply, illustratedReplyInstruction } from "./illustrated-reply.js";
@@ -299,7 +300,7 @@ async function requestCompletionOnce({ apiKey, settings, messages, tools = null,
 }
 
 async function requestCompletion(options) {
-  const stepTimeout = options.forwardBatchTimeout === true ? 120_000 : timeoutMs;
+  const stepTimeout = options.forwardBatchTimeout === true ? 120_000 : options.summaryInspection === true ? 30_000 : timeoutMs;
   const retryState = { attempts: 0, limit: options.settings.modelRetryEnabled === false ? 1 : 2, signal: AbortSignal.timeout(stepTimeout) };
   const attemptOptions = { ...options, retryState };
   try { return await requestCompletionOnce(attemptOptions); }
@@ -463,7 +464,7 @@ async function getLlmReplyInternal({
   const summaryIntent = !proactive && !localOnlyRequest ? parseSummaryIntent(userMessage, { aliases: settings.botAliases }) : null;
   const illustratedDiscussion = !proactive && !summaryIntent && settings.contentSummaryEnabled !== false && wantsIllustratedReply(userMessage);
   if (detailedDiscussion) settings = { ...settings, maxTokens: Math.max(settings.maxTokens, 2304) };
-  if (summaryIntent) settings = { ...settings, maxTokens: Math.max(settings.maxTokens, 2800) };
+  if (summaryIntent) settings = { ...settings, maxTokens: Math.max(settings.maxTokens, 4096) };
   if (illustratedDiscussion) settings = { ...settings, maxTokens: Math.max(settings.maxTokens, 2800) };
   const now = Date.now();
   const requestAt = Number.isFinite(requestTime) && requestTime > now-7*86400_000 && requestTime < now+30000 ? requestTime : now;
@@ -501,6 +502,13 @@ async function getLlmReplyInternal({
       onSummaryStart();
       try { summaryResult = await readSummarySource(summaryIntent, { apiKey: searchApiKey, settings, now: requestAt }); }
       catch (error) { return { reply: error instanceof SummaryReadError || error instanceof SearchRequestError ? error.message : "暂时没有读到原文，请稍后再试、换个公开链接，或直接贴出文字。", status: "summary-error", recoveryRetryable: error instanceof SearchRequestError && error.retryable === true, errorCode: error.code }; }
+      summaryResult = await prepareSummaryVerification(summaryResult, { apiKey: searchApiKey, settings,
+        inspect: async (instruction, material) => extractAssistantText(await requestCompletion({ apiKey,
+          settings: { ...settings, temperature: 0, maxTokens: 2048, modelRetryEnabled: false }, maxTokens: 2048,
+          emptyRetry: false, summaryInspection: true,
+          messages: [{ role: "system", content: instruction }, { role: "user", content: material }],
+        })),
+      });
     }
     if (searchQuery !== null && !summaryResult && !settings.searchEnabled) {
       return { reply: "网页搜索当前未启用，请管理员在管理页开启后再试。", status: "search-disabled" };
@@ -625,8 +633,8 @@ async function getLlmReplyInternal({
     const tools = automaticSearchEnabled ? [automaticSearchTool, bilibiliSearchTool] : [];
     const webpageReadingEnabled = !proactive && !localOnlyRequest && !summaryResult && settings.searchEnabled && settings.contentSummaryEnabled !== false;
     if (webpageReadingEnabled) tools.push(webpageTool);
-    if (!proactive && groupId) tools.push(localHistoryTool);
-    if (!proactive && settings.knowledgeEnabled !== false) tools.push(localKnowledgeTool);
+    if (!proactive && !summaryResult && groupId) tools.push(localHistoryTool);
+    if (!proactive && !summaryResult && settings.knowledgeEnabled !== false) tools.push(localKnowledgeTool);
     if (!proactive) messages.push({ role: "system", content: "检索来源分为：网页搜索、原网页正文、本机群聊缓存、本地梗词知识库。群聊与梗库检索不向搜索服务发送内容，只查当前群授权范围；这些片段会随问题交给当前模型组织回答。问群里说过什么或本群梗时先查本地工具，不用网页代替群聊。找不到要说明当前缓存覆盖有限，不编造聊天。需要查网上来源时再搜索；只拿到搜索片段就注明‘搜索摘要’，不能声称读过正文。回答时用简短文字区分本群记录、本地梗库或网页来源，避免把本群私有聊天粘到搜索词里。" });
     if (!proactive && !localOnlyRequest && !summaryResult && settings.videoUnderstandingEnabled && !videoResult) tools.push(videoTool);
     if (!proactive && !summaryResult && settings.videoUnderstandingEnabled) messages.push({ role: "system", content: videoReflectionInstruction + " 用户希望了解视频内容或观后感时，先用 read_bilibili_video 读取实际材料。搜索结果只是元数据。" });
@@ -648,6 +656,7 @@ async function getLlmReplyInternal({
     if (detailedDiscussion) messages.push({ role: "system", content: detailedDiscussionInstruction });
     if (summaryResult) messages.push({ role: "system", content: contentSummaryInstruction });
     if (illustratedDiscussion || (summaryResult && (summaryIntent.format ?? settings.summaryOutput) === "illustrated")) messages.push({ role: "system", content: illustratedReplyInstruction });
+    if (summaryResult?.verification?.claims.length) messages.push({ role: "system", content: summaryVerificationInstruction });
     messages.push({ role: "user", content });
 
     let payload;
@@ -795,8 +804,12 @@ async function getLlmReplyInternal({
         ? { reply: shortReply, status: "ok", groupPersonaRevision: settings.groupPersonaRevision }
         : { reply: null, status: "proactive-silent" };
     }
-    if (summaryResult) return { reply: `${summaryHeader(summaryResult)}\n\n${reply.slice(0, maxReplyLength)}`, status: "ok",
-      summary: { ...summaryResult, body: reply.slice(0, maxReplyLength), sourceText: summaryHeader(summaryResult), format: summaryIntent.format ?? settings.summaryOutput ?? "forward" }, groupPersonaRevision: settings.groupPersonaRevision };
+    if (summaryResult) {
+      const checked=finishSummaryVerification(summaryResult,reply),body=checked.body.slice(0,maxReplyLength);
+      const sourceText=summaryHeader(checked.result)+summaryVerificationFooter(checked.result);
+      return { reply: `${body}\n\n${sourceText}`, status: "ok",
+        summary: { ...checked.result, body, sourceText, format: summaryIntent.format ?? settings.summaryOutput ?? "forward" }, groupPersonaRevision: settings.groupPersonaRevision };
+    }
     if (illustratedDiscussion) {
       const body=reply.slice(0,maxReplyLength);
       const sourceText=searchResults.length ? "参考来源（检索不代表已核实全部内容）\n" + searchResults.map(({title,url})=>`${title}\n${url}`).join("\n\n") : "";

@@ -118,21 +118,22 @@ async function resolveSteamGame(intent) {
   return { appId: String(exact[0].id), name: String(exact[0].name).slice(0, 120) };
 }
 
-export function selectSteamAnnouncement(items, appId, { articleId = null, now = Date.now() } = {}) {
+export function selectSteamAnnouncement(items, appId, { articleId = null, now = Date.now(), dateWindow = null } = {}) {
   const official = (Array.isArray(items) ? items : []).filter((item) => item.feedname === "steam_community_announcements"
     && String(item.appid) === appId && /^\d{1,24}$/u.test(String(item.gid)) && typeof item.contents === "string"
-    && Number.isFinite(item.date) && item.date * 1000 <= now + 300000 && item.date > 0)
+    && Number.isFinite(item.date) && item.date * 1000 <= now + 300000 && item.date > 0
+    && (articleId || !dateWindow || (item.date * 1000 >= Date.parse(dateWindow.start+"T00:00:00+08:00") && item.date * 1000 <= Date.parse(dateWindow.end+"T23:59:59.999+08:00"))))
     .sort((a, b) => b.date - a.date);
   if (articleId) return official.find((item) => String(item.gid) === articleId) ?? null;
   return official.find((item) => /(?:\bpatch\b|\bhotfix\b|更新|补丁|修复|\b\d{1,3}\.\d{1,6}(?:\.\d+)?\b)/iu.test(item.title)
     || (/\bupdate\b/iu.test(item.title) && /(?:fixes|balancing|bug fixes|修复|平衡调整)/iu.test(item.contents))) ?? null;
 }
 
-async function readSteamAnnouncement(game) {
+async function readSteamAnnouncement(game, options = {}) {
   const url = new URL("https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/");
   url.search = new URLSearchParams({ appid: game.appId, count: "50", maxlength: "0", feeds: "steam_community_announcements" });
   const payload = await readJson(url);
-  const selected = selectSteamAnnouncement(payload.appnews?.newsitems, game.appId, { articleId: game.articleId });
+  const selected = selectSteamAnnouncement(payload.appnews?.newsitems, game.appId, { ...options, articleId: game.articleId });
   if (!selected) throw new AnnouncementReadError("已找到这款游戏，但近期官方频道中没有找到明确的更新公告。可以发送具体公告链接让我总结。");
   const body = articleBody(selected.contents);
   if (body.content.length < 100) throw new AnnouncementReadError("公告正文过短或只有跳转链接，请发送完整官方公告链接。");
@@ -141,11 +142,11 @@ async function readSteamAnnouncement(game) {
 }
 
 // Optional source adapter used by the general summary workflow.
-export async function tryReadSteamSummary(intent) {
+export async function tryReadSteamSummary(intent, options = {}) {
   const game = await resolveSteamGame(intent);
   if (!game) return null;
-  const article = await readSteamAnnouncement(game);
-  return { articles: [article], checkedAt: new Date().toISOString(), latestWithinOfficialChannel: !game.articleId, adapter: "steam" };
+  const article = await readSteamAnnouncement(game, options);
+  return { articles: [article], checkedAt: new Date().toISOString(), latestWithinOfficialChannel: !game.articleId && !options.dateWindow, adapter: "steam" };
 }
 
 async function extractPages(urls, apiKey) {

@@ -40,7 +40,7 @@ export function parseArticleDate(raw,{source="原网页",now=Date.now()}={}) {
     const local=`${calendarDay}T${String(hour).padStart(2,"0")}:${minute}:${second??"00"}`;
     if(zone) {
       const offset=/^(?:z|utc|gmt)$/iu.test(zone)?"Z":zone==="北京时间"?"+08:00":zone.replace(/^([+-]\d{2})(\d{2})$/u,"$1:$2");
-      if(offset!=="Z"&&(Number(offset.slice(1,3))>14||Number(offset.slice(4,6))>59))return null;
+      if(offset!=="Z"&&(Number(offset.slice(1,3))>14||Number(offset.slice(4,6))>59||(Number(offset.slice(1,3))===14&&Number(offset.slice(4,6))!==0)))return null;
       epoch=Date.parse(local+offset);if(!Number.isFinite(epoch))return null;value=new Date(epoch).toISOString();
     } else value=local;
   }
@@ -67,7 +67,14 @@ function selectDate(candidates) {
 }
 
 function samePage(a,b) {
-  try {const left=new URL(a,b),right=new URL(b);left.hash="";right.hash="";left.search="";right.search="";return left.href.replace(/\/$/u,"")===right.href.replace(/\/$/u,"");} catch{return false;}
+  try {
+    const normalize=value=>{
+      const url=new URL(value,b);url.hash="";
+      for(const key of [...url.searchParams.keys()])if(/^(?:utm_.+|fbclid|gclid|spm)$/iu.test(key))url.searchParams.delete(key);
+      url.searchParams.sort();return url.href.replace(/\/$/u,"");
+    };
+    return normalize(a)===normalize(b);
+  } catch{return false;}
 }
 
 function structuredArticles(html,url) {
@@ -84,7 +91,25 @@ function structuredArticles(html,url) {
     try {visit(JSON.parse(match[1].trim().replace(/^<!--|-->$/gu,"")));} catch{}
   }
   const exact=url?nodes.filter(node=>[node.url,node["@id"],typeof node.mainEntityOfPage==="string"?node.mainEntityOfPage:node.mainEntityOfPage?.["@id"]].some(value=>typeof value==="string"&&samePage(value,url))):[];
-  return exact.length?exact:nodes.length===1?nodes:[];
+  // A sole foreign Article can be a recommendation rather than this document.
+  const identities=node=>[node.url,node["@id"],typeof node.mainEntityOfPage==="string"?node.mainEntityOfPage:node.mainEntityOfPage?.["@id"]].filter(value=>typeof value==="string"&&value&&!value.startsWith("#"));
+  return exact.length?exact:nodes.length===1&&(!url||!identities(nodes[0]).length)?nodes:[];
+}
+
+// These are quoted declarations in the body, not certified event dates. A future
+// effective date is valid evidence and must not be mistaken for future publication.
+export function eventDateEvidence(value,{now=Date.now()}={}) {
+  const text=String(value??"").slice(0,32000),items=[],seen=new Set();
+  const labels=/(?:生效|施行|实施|上线|开放|维护|发生|举办|举行|effective|takes? effect|comes? into force|launch|release|maintenance)/iu;
+  for(const match of text.matchAll(new RegExp(datePattern,"giu"))) {
+    const start=Math.max(0,match.index-42),end=Math.min(text.length,match.index+match[0].length+48);
+    const quote=text.slice(start,end).replace(/\s+/gu," ").trim();
+    if(!labels.test(quote))continue;
+    const date=parseArticleDate(match[0],{now,source:"实际取得的正文日期片段"});if(!date)continue;
+    const kind=/生效|施行|实施|effective|takes? effect|comes? into force/iu.test(quote)?"生效/实施时间线索":"事件/上线时间线索";
+    const key=kind+date.value;if(seen.has(key))continue;seen.add(key);items.push({kind,date,quote});if(items.length>=5)break;
+  }
+  return items;
 }
 
 export function labelledDateCandidates(value,{now=Date.now(),source="原文显示"}={}) {
@@ -154,8 +179,17 @@ export function displayArticleDate(date) {
 }
 
 export function summaryDateWindow(intent,{now=Date.now()}={}) {
-  if(!intent.latest)return null;
   const subject=intent.subject??"",today=chinaDay(now),todayStart=Date.parse(today+"T00:00:00+08:00");
+  // Only an explicitly requested publication date defines this filter. A date
+  // in an event title (e.g. a future effective date) is not a publication window.
+  const dateScope=subject.match(/(?:发布日期|发布时间|发表于|发布于|发表日期)[\s:：为在]*(.{0,80})/u)?.[1]??"";
+  const declared=dateScope.match(/^(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?)(?:\s*(?:至|到|~|～)\s*(\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?))?/u);
+  const explicit=declared?[declared[1],declared[2]].filter(Boolean).map(value=>parseArticleDate(value,{now})).filter(Boolean):[];
+  if(explicit.length&&(!declared[2]||explicit.length===2)) {
+    const start=explicit[0].calendarDay,end=explicit[1]?.calendarDay??start;
+    if(start<=end)return {start,end,label:explicit.length===1?start:`${start}至${end}`,timezone:"Asia/Shanghai"};
+  }
+  if(!intent.latest)return null;
   let start=todayStart-29*dayMs,end=todayStart+dayMs-1,label="近30天";
   if(/(?:今天|今日)/u.test(subject)){start=todayStart;label="今天";}
   else if(/昨天|昨日/u.test(subject)){start=todayStart-dayMs;end=todayStart-1;label="昨天";}
@@ -171,7 +205,7 @@ export function summaryDateWindow(intent,{now=Date.now()}={}) {
 }
 
 export function dateWithinWindow(article,window) {
-  if(["original-page-unreadable","extracted-text-only"].includes(article.dateVerification))return false;
+  if(["original-page-unreadable","original-page-body-unreadable","extracted-text-only"].includes(article.dateVerification))return false;
   const date=article.publication?.status==="verified"?article.publication.date:null;
   if(!date)return false;
   const day=date.timezoneKnown?chinaDay(Date.parse(date.value)):date.calendarDay;
