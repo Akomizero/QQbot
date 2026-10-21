@@ -38,6 +38,8 @@ const llmFields = {
   memory: document.querySelector("#llm-memory"),
   knowledgeEnabled: document.querySelector("#knowledge-enabled"),
   knowledgeLearningEnabled: document.querySelector("#knowledge-learning-enabled"),
+  memberImpressionsEnabled: document.querySelector("#member-impressions-enabled"),
+  memberImpressionsLearningEnabled: document.querySelector("#member-impressions-learning-enabled"),
   stickersEnabled: document.querySelector("#stickers-enabled"),
   stickerLearningEnabled: document.querySelector("#sticker-learning-enabled"),
   nicknameTriggerEnabled: document.querySelector("#nickname-trigger-enabled"),
@@ -417,6 +419,8 @@ llmSettingsForm.addEventListener("submit", async (event) => {
     memory: llmFields.memory.value,
     knowledgeEnabled: llmFields.knowledgeEnabled.checked,
     knowledgeLearningEnabled: llmFields.knowledgeLearningEnabled.checked,
+    memberImpressionsEnabled: llmFields.memberImpressionsEnabled.checked,
+    memberImpressionsLearningEnabled: llmFields.memberImpressionsLearningEnabled.checked,
     stickersEnabled: llmFields.stickersEnabled.checked,
     stickerLearningEnabled: llmFields.stickerLearningEnabled.checked,
     nicknameTriggerEnabled: llmFields.nicknameTriggerEnabled.checked,
@@ -486,6 +490,8 @@ function setLlmSettings(settings) {
   llmFields.memory.value = settings.memory ?? "";
   llmFields.knowledgeEnabled.checked = settings.knowledgeEnabled !== false;
   llmFields.knowledgeLearningEnabled.checked = settings.knowledgeLearningEnabled !== false;
+  llmFields.memberImpressionsEnabled.checked = settings.memberImpressionsEnabled !== false;
+  llmFields.memberImpressionsLearningEnabled.checked = settings.memberImpressionsLearningEnabled !== false;
   llmFields.stickersEnabled.checked = settings.stickersEnabled !== false;
   llmFields.stickerLearningEnabled.checked = settings.stickerLearningEnabled !== false;
   llmFields.nicknameTriggerEnabled.checked = settings.nicknameTriggerEnabled !== false;
@@ -599,6 +605,7 @@ function setAccessControl(accessControl) {
 }
 
 async function loadManagementData() {
+  await loadMemberImpressions();
   await loadKnowledge();
   await loadStickers();
   await loadGroupPersonas();
@@ -1174,7 +1181,7 @@ stickerForm.addEventListener("submit", async (event) => {
   finally { button.disabled = false; }
 });
 
-for (const key of ["knowledgeEnabled", "knowledgeLearningEnabled", "stickersEnabled", "stickerLearningEnabled"]) {
+for (const key of ["knowledgeEnabled", "knowledgeLearningEnabled", "memberImpressionsEnabled", "memberImpressionsLearningEnabled", "stickersEnabled", "stickerLearningEnabled"]) {
   llmFields[key].addEventListener("change", async () => {
     const checked = llmFields[key].checked;
     llmFields[key].disabled = true;
@@ -1184,8 +1191,116 @@ for (const key of ["knowledgeEnabled", "knowledgeLearningEnabled", "stickersEnab
   });
 }
 
+let selectedMemberGroup = "";
+let memberData = { members: [], revision: null, groups: [] };
+let memberDraft = null;
+let memberLoadSequence = 0;
+let memberRefreshTimer;
+const memberForm = document.querySelector("#member-form");
+const memberGroupSelect = document.querySelector("#member-group");
+const memberKindNames = { preference: "娱乐偏好", interest: "兴趣话题", interaction: "互动习惯", nickname: "称呼偏好" };
+function renderMemberList() {
+  const list = document.querySelector("#member-list"), query = document.querySelector("#member-filter").value.trim().toLocaleLowerCase("zh-CN");
+  list.replaceChildren();
+  const members = memberData.members ?? [], candidates = members.reduce((sum, profile) => sum + profile.facts.filter(fact => fact.reviewStatus === "candidate").length, 0);
+  document.querySelector("#member-count").textContent = `${members.length} 位成员 · ${candidates} 条待确认印象`;
+  for (const profile of members.filter(profile => !query || `${profile.name} ${profile.userId}`.toLocaleLowerCase("zh-CN").includes(query))) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "command-card";
+    const name = document.createElement("strong"); name.textContent = profile.name || `QQ ${profile.userId}`;
+    const detail = document.createElement("span"); detail.className = "field-hint";
+    detail.textContent = `${profile.userId} · ${profile.facts.filter(fact => fact.enabled).length} 条启用 · ${profile.facts.filter(fact => fact.reviewStatus === "candidate").length} 条待确认${profile.learningEnabled ? "" : " · 已暂停积累"}${profile.enabled ? "" : " · 已停用召回"}`;
+    button.append(name, detail); button.addEventListener("click", () => editMember(profile)); list.append(button);
+  }
+  if (!list.children.length) { const empty = document.createElement("p"); empty.className = "field-hint"; empty.textContent = members.length ? "没有匹配的成员。" : "本群还没有成员印象。可让成员明确自述兴趣或说‘记住，我喜欢……’，也可由管理员添加。"; list.append(empty); }
+}
+function memberField(label, value, onChange, { area = false, maxLength = 240 } = {}) {
+  const wrapper = document.createElement("label"); wrapper.className = "settings-field";
+  const caption = document.createElement("span"); caption.textContent = label;
+  const input = document.createElement(area ? "textarea" : "input"); input.value = value ?? ""; input.maxLength = maxLength;
+  if (area) input.rows = 2;
+  input.addEventListener("input", () => onChange(input.value)); wrapper.append(caption, input); return wrapper;
+}
+function renderMemberFacts() {
+  const container = document.querySelector("#member-facts"); container.replaceChildren();
+  for (const fact of memberDraft.facts) {
+    const card = document.createElement("article"); card.className = "member-fact";
+    const status = document.createElement("p"); status.className = "field-hint";
+    const evidence = fact.evidenceRefs ?? [];
+    status.textContent = `${{ candidate: "待确认", approved: fact.enabled ? "已确认/启用" : "已确认/停用", rejected: "已拒绝" }[fact.reviewStatus]} · ${fact.origin === "member" ? "成员自述" : "管理员维护"} · ${evidence.length} 条来源${evidence.length ? ` · 最近${new Date(evidence.at(-1).at).toLocaleString("zh-CN")}` : ""}${fact.supersedesId ? " · 修正候选，确认后停用旧版本" : ""}（修改需保存成员）`;
+    const kind = document.createElement("select"); kind.setAttribute("aria-label", "印象类别");
+    for (const [value, label] of Object.entries(memberKindNames)) kind.add(new Option(label, value)); kind.value = fact.kind; kind.addEventListener("change", () => { fact.kind = kind.value; });
+    card.append(status, kind, memberField("主题", fact.topic, value => { fact.topic = value; }, { maxLength: 30 }),
+      memberField("印象内容", fact.content, value => { fact.content = value; }, { area: true }),
+      memberField("关键词（逗号或顿号分隔）", fact.tags.join("、"), value => { fact.tags = value.split(/[,，、]/u).map(tag => tag.trim()).filter(Boolean); }, { maxLength: 120 }));
+    const actions = document.createElement("div"); actions.className = "form-actions";
+    for (const [caption, action] of [["设为已确认", () => { fact.reviewStatus = "approved"; fact.enabled = true; }], ["设为拒绝", () => { fact.reviewStatus = "rejected"; fact.enabled = false; }], ["停用", () => { fact.enabled = false; }], ["删除此条", () => { memberDraft.facts = memberDraft.facts.filter(item => item.id !== fact.id); }]]) {
+      const button = document.createElement("button"); button.type = "button"; button.className = "button button-quiet"; button.textContent = caption;
+      button.addEventListener("click", () => { action(); renderMemberFacts(); showToast("修改待保存，请点击‘保存成员’。"); }); actions.append(button);
+    }
+    if (evidence.length) { const source = document.createElement("details"), caption = document.createElement("summary"), refs = document.createElement("p"); caption.textContent = "查看来源指纹"; refs.className = "field-hint"; refs.textContent = evidence.map(ref => `${ref.hash.slice(0, 16)} · ${new Date(ref.at).toLocaleString("zh-CN")}`).join("\n"); source.append(caption, refs); card.append(source); }
+    card.append(actions); container.append(card);
+  }
+}
+function editMember(profile = null) {
+  memberDraft = profile ? structuredClone(profile) : { userId: "", name: "", enabled: true, learningEnabled: true, facts: [] };
+  document.querySelector("#member-editor-title").textContent = profile ? `编辑 ${profile.name || profile.userId}` : "添加成员印象";
+  document.querySelector("#member-user-id").value = memberDraft.userId; document.querySelector("#member-user-id").disabled = Boolean(profile);
+  document.querySelector("#member-name").value = memberDraft.name;
+  document.querySelector("#member-profile-enabled").checked = memberDraft.enabled;
+  document.querySelector("#member-learning-enabled").checked = memberDraft.learningEnabled;
+  document.querySelector("#forget-member").hidden = !profile;
+  document.querySelector("#member-error").hidden = true; memberForm.hidden = false; renderMemberFacts();
+}
+async function loadMemberImpressions() {
+  const sequence = ++memberLoadSequence;
+  let data;
+  try { data = await requestAdminApi(`/api/member-impressions${selectedMemberGroup ? `?groupId=${encodeURIComponent(selectedMemberGroup)}` : ""}`); }
+  catch (error) {
+    if (sequence !== memberLoadSequence) return;
+    if (error.status !== 404 || !selectedMemberGroup) throw error;
+    selectedMemberGroup = ""; data = await requestAdminApi("/api/member-impressions");
+  }
+  if (sequence !== memberLoadSequence) return;
+  selectedMemberGroup = data.groupId ?? ""; memberData = data;
+  memberGroupSelect.replaceChildren(...data.groups.map(id => new Option(`群 ${id}`, id))); memberGroupSelect.value = selectedMemberGroup;
+  document.querySelector("#add-member").disabled = !selectedMemberGroup; document.querySelector("#extract-member-impressions").disabled = !selectedMemberGroup;
+  const learning = data.learning;
+  const outcomes = { saved: "已保存新资料", "no-facts": "本次没有可用新资料", "waiting-context": "等待更多明确自述", waiting: "等待提炼", learning: "正在提炼", "model-error": "模型暂时失败，保留短期缓冲重试", "daily-limit": "今日次数已用完", "buffer-cleared": "重启或关闭后已清空原始缓冲", filtered: "已过滤不适合积累的内容", "missing-key": "尚未配置模型密钥" };
+  document.querySelector("#member-learning-status").textContent = selectedMemberGroup ? `群 ${selectedMemberGroup} · 共享缓冲${learning?.bufferedMessages ?? 0}条 · ${outcomes[learning?.outcome] ?? "等待成员自述"} · 今日${learning?.attemptsToday ?? 0}/12次${learning?.lastSavedAt ? ` · 最近保存${new Date(learning.lastSavedAt).toLocaleString("zh-CN")}，其中成员印象${learning.lastMemberAddedCount ?? 0}条` : ""}` : "请先在群与权限中添加授权群。";
+  renderMemberList();
+  if (!memberRefreshTimer) memberRefreshTimer = setInterval(() => { if (!managementContent.hidden && !document.querySelector("#page-members").hidden && memberForm.hidden) void loadMemberImpressions().catch(() => {}); }, 10000);
+}
+document.querySelector("#member-filter").addEventListener("input", renderMemberList);
+memberGroupSelect.addEventListener("change", () => { selectedMemberGroup = memberGroupSelect.value; memberForm.hidden = true; void loadMemberImpressions().catch(error => showToast(error.message, true)); });
+document.querySelector("#refresh-members").addEventListener("click", () => { memberForm.hidden = true; void loadMemberImpressions().catch(error => showToast(error.message, true)); });
+document.querySelector("#add-member").addEventListener("click", () => editMember());
+document.querySelector("#cancel-member").addEventListener("click", () => { memberForm.hidden = true; void loadMemberImpressions().catch(error => showToast(error.message, true)); });
+document.querySelector("#add-member-fact").addEventListener("click", () => {
+  if (memberDraft.facts.length >= 20) { showToast("每人最多20条，请先清理。", true); return; }
+  memberDraft.facts.push({ id: crypto.randomUUID(), kind: "preference", topic: "", content: "", tags: [], reviewStatus: "approved", enabled: true }); renderMemberFacts();
+});
+memberForm.addEventListener("submit", async event => {
+  event.preventDefault(); const groupId = selectedMemberGroup;
+  memberDraft.userId = document.querySelector("#member-user-id").value.trim(); memberDraft.name = document.querySelector("#member-name").value.trim();
+  memberDraft.enabled = document.querySelector("#member-profile-enabled").checked; memberDraft.learningEnabled = document.querySelector("#member-learning-enabled").checked;
+  try {
+    const data = await requestAdminApi("/api/member-impressions", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId, userId: memberDraft.userId, profile: memberDraft, revision: memberData.revision }) });
+    if (groupId === selectedMemberGroup) { memberData = data; memberForm.hidden = true; renderMemberList(); } showToast(data.message);
+  } catch (error) { document.querySelector("#member-error").textContent = error.message; document.querySelector("#member-error").hidden = false; }
+});
+document.querySelector("#forget-member").addEventListener("click", async () => {
+  if (!window.confirm("清除此成员在本群的全部印象并暂停继续积累？旧印象不会自动恢复。")) return;
+  const groupId = selectedMemberGroup;
+  try { const data = await requestAdminApi("/api/member-impressions", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId, userId: memberDraft.userId, revision: memberData.revision }) }); if (groupId === selectedMemberGroup) { memberData = data; memberForm.hidden = true; renderMemberList(); } showToast(data.message); }
+  catch (error) { showToast(error.message, true); }
+});
+document.querySelector("#extract-member-impressions").addEventListener("click", async () => {
+  try { const data = await requestAdminApi("/api/member-impressions/learn", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId: selectedMemberGroup }) }); showToast(data.message); }
+  catch (error) { showToast(error.message, true); }
+});
+
 function setupNavigation() {
-  const descriptions = { chat: "管理通用功能、模型连接和默认人设；各群角色在分群人设中单独配置。", personas: "选择一个群，分别设置个性、表达风格、昵称呼唤词和长期记忆。", knowledge: "积累群内网梗和互动背景，查看、确认或编辑学到的知识。", stickers: "放入常用表情，给它们标上情绪和适用场景。", access: "查看连接状态，设置哪些群和好友可以与 bot 互动。", commands: "管理固定指令，常用回复一键配置。" };
+  const descriptions = { members: "按群和成员分别记住明确自述的兴趣与互动习惯，审核、纠正或清除印象。", chat: "管理通用功能、模型连接和默认人设；各群角色在分群人设中单独配置。", personas: "选择一个群，分别设置个性、表达风格、昵称呼唤词和长期记忆。", knowledge: "积累群内网梗和互动背景，查看、确认或编辑学到的知识。", stickers: "放入常用表情，给它们标上情绪和适用场景。", access: "查看连接状态，设置哪些群和好友可以与 bot 互动。", commands: "管理固定指令，常用回复一键配置。" };
   const buttons = [...document.querySelectorAll(".management-nav [data-page]")];
   function showPage(page) {
     if (!Object.hasOwn(descriptions, page)) page = "chat";
@@ -1193,6 +1308,7 @@ function setupNavigation() {
     for (const button of buttons) { button.setAttribute("aria-selected", String(button.dataset.page === page)); button.tabIndex = button.dataset.page === page ? 0 : -1; }
     document.querySelector("#page-description").textContent = descriptions[page];
     document.querySelector("#add-command").hidden = page !== "commands";
+    if (page === "members" && !managementContent.hidden && memberForm.hidden) void loadMemberImpressions().catch(error => showToast(error.message, true));
     if (page === "stickers" && !managementContent.hidden) void loadStickers();
     if (page === "knowledge" && !managementContent.hidden) void loadKnowledge();
     if (page === "personas" && !managementContent.hidden) void loadGroupPersonas();
@@ -1235,7 +1351,7 @@ document.querySelector("#refresh-model-diagnostics").addEventListener("click", a
   try {
     const data = await requestAdminApi("/api/model-diagnostics");
     const labels = { start: "开始", http: "HTTP响应", transport: "连接失败", body: "正文传输", json: "数据解析", empty: "空回复", refusal: "模型拒绝", truncated: "长度截断", tools: "工具阶段", retry: "延迟补试", success: "返回答复", failure: "最终失败" };
-    output.textContent = data.events.length ? data.events.slice(-20).map(item => `${new Date(item.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}  ${item.id}  ${labels[item.kind] ?? item.kind}${item.code ? " · " + item.code : ""}${item.status ? " · HTTP " + item.status : ""}${item.route ? " · " + (item.route === "proxy" ? "代理" : "直连") : ""}${item.phase ? " · " + item.phase : ""}${item.attempt ? " · 第" + item.attempt + "次连接" : ""}${item.elapsedMs !== undefined ? " · " + item.elapsedMs + "ms" : ""}`).join("\n") : "尚无新版诊断记录，收到模型请求后会出现。查看此页不会调用模型。";
+    output.textContent = data.events.length ? data.events.slice(-20).map(item => `${new Date(item.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}  ${item.id}  ${labels[item.kind] ?? item.kind}${item.code ? " · " + item.code : ""}${item.status ? " · HTTP " + item.status : ""}${item.route ? " · " + ({ proxy: "代理", proxy_ipv4: "代理 IPv4", direct: "直连" }[item.route] ?? item.route) : ""}${item.phase ? " · " + item.phase : ""}${item.attempt ? " · 第" + item.attempt + "次连接" : ""}${item.elapsedMs !== undefined ? " · " + item.elapsedMs + "ms" : ""}`).join("\n") : "尚无新版诊断记录，收到模型请求后会出现。查看此页不会调用模型。";
   } catch (error) { output.textContent = error.message; } finally { button.disabled = false; }
 });
 setupNavigation();

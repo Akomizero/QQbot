@@ -138,6 +138,14 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 23px
 .toast-visible { transform: translateY(0); opacity: 1; }
 .toast-error { border-color: #efcfcc; color: #a03c36; }
 .knowledge-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.member-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 18px 0; }
+.member-toolbar > input { flex: 1; min-width: 160px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.member-toolbar .button, #refresh-members { white-space: nowrap; flex-shrink: 0; }
+.member-layout { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 1.5fr); gap: 24px; align-items: start; }
+.member-layout:has(> form[hidden]) { grid-template-columns: 1fr; }
+#member-list { max-height: 65vh; overflow-y: auto; }
+.member-fact { border: 1px solid var(--line); padding: 14px; border-radius: 10px; margin-bottom: 12px; display: grid; gap: 10px; }
+.member-fact .form-actions { flex-wrap: wrap; }
 .knowledge-grid:has(> form[hidden]) { grid-template-columns: minmax(0, 1fr); }
 .knowledge-editor { display: grid; gap: 13px; padding-top: 14px; }
 .knowledge-preview-form { display: flex; align-items: end; gap: 12px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
@@ -178,6 +186,7 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 23px
   .intro > .button { align-self: stretch; }
   .workspace { grid-template-columns: 1fr; }
   .knowledge-grid { grid-template-columns: 1fr; }
+  .member-layout { grid-template-columns: 1fr; }
   .management-nav button { padding-inline: 12px; }
   .settings-group .settings-grid { grid-template-columns: 1fr; }
   #group-persona-form > .settings-grid, #persona-values > .settings-grid { grid-template-columns: 1fr; }

@@ -14,6 +14,8 @@ export const DEFAULT_LLM_SETTINGS = {
   memory: "",
   knowledgeEnabled: true,
   knowledgeLearningEnabled: true,
+  memberImpressionsEnabled: true,
+  memberImpressionsLearningEnabled: true,
   stickersEnabled: true,
   stickerLearningEnabled: true,
   nicknameTriggerEnabled: true,
@@ -91,6 +93,8 @@ export function normalizeLlmSettings(settings) {
   const temperature = Number(settings.temperature);
   const knowledgeEnabled = settings.knowledgeEnabled === undefined ? DEFAULT_LLM_SETTINGS.knowledgeEnabled : settings.knowledgeEnabled;
   const knowledgeLearningEnabled = settings.knowledgeLearningEnabled === undefined ? DEFAULT_LLM_SETTINGS.knowledgeLearningEnabled : settings.knowledgeLearningEnabled;
+  const memberImpressionsEnabled = settings.memberImpressionsEnabled ?? DEFAULT_LLM_SETTINGS.memberImpressionsEnabled;
+  const memberImpressionsLearningEnabled = settings.memberImpressionsLearningEnabled ?? DEFAULT_LLM_SETTINGS.memberImpressionsLearningEnabled;
   const stickersEnabled = settings.stickersEnabled === undefined ? DEFAULT_LLM_SETTINGS.stickersEnabled : settings.stickersEnabled;
   const stickerLearningEnabled = settings.stickerLearningEnabled === undefined ? DEFAULT_LLM_SETTINGS.stickerLearningEnabled : settings.stickerLearningEnabled;
   const nicknameTriggerEnabled = settings.nicknameTriggerEnabled ?? DEFAULT_LLM_SETTINGS.nicknameTriggerEnabled;
@@ -136,6 +140,7 @@ export function normalizeLlmSettings(settings) {
   if (!expressionStyle || expressionStyle.length > 1000) throw new Error("表达风格不能为空，且最多 1000 个字符。");
   if (memory.length > 4000) throw new Error("长期记忆和群内常识最多 4000 个字符。");
   if (typeof knowledgeEnabled !== "boolean") throw new Error("知识库开关必须是布尔值。");
+  if (typeof memberImpressionsEnabled !== "boolean" || typeof memberImpressionsLearningEnabled !== "boolean") throw new Error("成员印象开关必须是布尔值。");
   if (typeof knowledgeLearningEnabled !== "boolean" || typeof stickersEnabled !== "boolean" || typeof stickerLearningEnabled !== "boolean") throw new Error("群聊积累和表情包开关必须是布尔值。");
   if (typeof nicknameTriggerEnabled !== "boolean" || typeof proactivePauseWhenIgnored !== "boolean") throw new Error("昵称呼唤和无人回应开关必须是布尔值。");
   if (typeof conversationFollowupEnabled !== "boolean") throw new Error("对话衔接开关必须是布尔值。");
@@ -185,6 +190,8 @@ export function normalizeLlmSettings(settings) {
     memory,
     knowledgeEnabled,
     knowledgeLearningEnabled,
+    memberImpressionsEnabled,
+    memberImpressionsLearningEnabled,
     stickersEnabled,
     stickerLearningEnabled,
     nicknameTriggerEnabled,

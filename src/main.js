@@ -29,6 +29,8 @@ import { sendReplyWithFolding } from "./long-reply.js";
 import { rememberGroupLine, warmGroupContext, isPossibleBotFollowup, recentGroupContext, clearGroupConversations, findGroupLine } from "./conversation-context.js";
 import { resolveMessageContext, messageReferences } from "./message-context.js";
 import { noteStickerFeedback } from "./sticker-preferences.js";
+import { memberMemoryCommand, forgetMemberImpression, resumeMemberImpression, memberLearningStamp } from "./member-impressions.js";
+import { clearMemberLearningBuffer } from "./knowledge-learning.js";
 
 const sensitiveValues = new Set();
 const seenMessageIds = new Map();
@@ -524,6 +526,20 @@ async function handleMessage(event, { sendMessage }, config) {
       return sendReplyWithFolding(queuedParams, sendMessage, { settings, selfId: numericId(event.self_id), allowed });
     }, allowed);
   };
+  if (authorized.scope === "group" && authorized.mentioned && !authorized.messageContext?.mentions.some(item => !item.isBot)) {
+    const memoryCommand = memberMemoryCommand(authorized.content);
+    if (memoryCommand) {
+      try {
+        if (memoryCommand === "forget") forgetMemberImpression(authorized.groupId, authorized.userId);
+        else resumeMemberImpression(authorized.groupId, authorized.userId);
+        clearMemberLearningBuffer(authorized.groupId, authorized.userId);
+        clearGroupConversations(authorized.groupId);
+        cancelPendingGroupTurn(authorized.groupId);
+        passiveGroupContexts.delete(authorized.groupId);
+        authorized.memberMemoryAction = memoryCommand;
+      } catch { authorized.memberMemoryAction = "failed"; }
+    }
+  }
   const task = async () => {
     const latest = readAccessControl();
     if (authorized.scope === "group" ? !latest.groupIds.includes(authorized.groupId) : !latest.userIds.includes(authorized.userId)) return;
@@ -543,6 +559,11 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     auto_escape: true,
   });
 
+  if (authorized.memberMemoryAction) {
+    await sendText(authorized.memberMemoryAction === "forget" ? "已清除本群关于你的长期印象，并暂停继续积累。想恢复时可以对我说‘继续记住我’。"
+      : authorized.memberMemoryAction === "resume" ? "已恢复本群关于你的印象积累。清除过的旧印象不会恢复。" : "这次没能修改你的成员印象，请管理员检查本机成员印象页。");
+    return;
+  }
   const command = getCommandMatch(authorized.content);
   if (command.kind === "matched") {
     if (authorized.scope === "group" && !authorized.mentioned) {
@@ -564,7 +585,8 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
   if (authorized.scope === "group" && command.kind === "none" && !searchIntent && !summaryIntent
     && segmentsOf(event.message).every((segment) => ["text", "at", "image", "reply"].includes(segment?.type))) {
     try { observeKnowledgeMessage({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content.replaceAll("[QQ表情]", "").trim(), settings: readLlmSettings(),
-      messageId: event.message_id, relatedStickerId: authorized.messageContext?.reply?.stickerId }); } catch {}
+      messageId: event.message_id, relatedStickerId: authorized.messageContext?.reply?.stickerId,
+      memberName: event.sender?.card || event.sender?.nickname || "", hasQuote: messageReferences(event.message).replyIds.length > 0 }); } catch {}
   }
 
   if (authorized.scope === "group" && !authorized.mentioned) {
@@ -762,7 +784,9 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       await sendLlmResult(result, {
         message_type: authorized.scope,
         ...(authorized.scope === "group" ? { group_id: authorized.groupId } : { user_id: authorized.userId }),
-      }, (action, params, stickerGuard = () => true) => sendMessage(action, params, () => stickerGuard() && (authorized.scope !== "group" || !result.groupPersonaRevision
+      }, (action, params, stickerGuard = () => true) => sendMessage(action, params, () => stickerGuard()
+        && (authorized.scope !== "group" || result.memberImpressionGeneration === undefined || memberLearningStamp(authorized.groupId, authorized.userId).generation === result.memberImpressionGeneration)
+        && (authorized.scope !== "group" || !result.groupPersonaRevision
         || settingsForGroup(readLlmSettings(), authorized.groupId).groupPersonaRevision === result.groupPersonaRevision)), { ...readLlmSettings(), onSent: (sent, metadata) => {
         if (authorized.scope !== "group") return;
         rememberGroupLine({ groupId: authorized.groupId, userId: "bot", text: result.reply || "[发送表情]", messageId: sent?.message_id, isBot: true, stickerId: metadata?.stickerId,
@@ -831,7 +855,7 @@ async function main() {
       onLlmSettingsSaved: (settings) => {
         if (!settings.conversationFollowupEnabled) clearGroupConversations();
         if (!settings.proactiveChatEnabled) clearPassiveContexts();
-        if (!settings.knowledgeLearningEnabled || !settings.knowledgeEnabled) clearKnowledgeLearning();
+        if ((!settings.knowledgeLearningEnabled || !settings.knowledgeEnabled) && (!settings.memberImpressionsEnabled || !settings.memberImpressionsLearningEnabled)) clearKnowledgeLearning();
         if (settings.stickersEnabled && settings.visionEnabled) queuePendingStickerDescriptions();
       },
       onGroupPersonaSaved: (groupId) => {
@@ -839,6 +863,10 @@ async function main() {
         cancelPendingGroupTurn(groupId);
         cancelContextExpiry(groupId);
         passiveGroupContexts.delete(groupId);
+      },
+      onMemberImpressionChanged: (groupId, userId) => {
+        clearMemberLearningBuffer(groupId, userId); clearGroupConversations(groupId);
+        cancelPendingGroupTurn(groupId); passiveGroupContexts.delete(groupId);
       },
     });
     console.log("NapCat OneBot 11 桥接已启动，仅监听 127.0.0.1。");

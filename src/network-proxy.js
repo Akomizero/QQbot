@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { ProxyAgent, setGlobalDispatcher } from "undici";
+import { Pool, ProxyAgent, setGlobalDispatcher } from "undici";
+import { resolve4 } from "node:dns/promises";
+import { isIP } from "node:net";
 import { loadEnvironment } from "./config.js";
 
 loadEnvironment();
@@ -36,8 +38,56 @@ const configuredProxy = process.env.HTTPS_PROXY?.trim()
   || process.env.http_proxy?.trim()
   || readWindowsProxyUrl();
 
-export function createModelDispatcher() {
-  return configuredProxy ? new ProxyAgent(configuredProxy) : undefined;
+const modelAddressCache = new Map();
+
+export async function resolveModelConnectAddress(endpoint, { resolver = resolve4, attempt = 1, signal } = {}) {
+  const url = new URL(endpoint);
+  if (url.protocol !== "https:" || isIP(url.hostname) || url.hostname === "localhost" || url.hostname.endsWith(".invalid")) return null;
+  signal?.throwIfAborted();
+  let addresses;
+  const cached = resolver === resolve4 ? modelAddressCache.get(url.hostname) : null;
+  if (cached && cached.until > Date.now()) addresses = cached.addresses;
+  else {
+    let timer;
+    try {
+      addresses = await Promise.race([
+        resolver(url.hostname),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Model DNS deadline")), 1500); }),
+      ]);
+      addresses = [...new Set(addresses.filter(address => typeof address === "string" && isIP(address) === 4))];
+    } catch { addresses = []; }
+    finally { clearTimeout(timer); }
+    if (resolver === resolve4) {
+      if (modelAddressCache.size >= 128) modelAddressCache.delete(modelAddressCache.keys().next().value);
+      modelAddressCache.set(url.hostname, { addresses, until: Date.now() + (addresses.length ? 60_000 : 10_000) });
+    }
+  }
+  signal?.throwIfAborted();
+  return addresses.length ? addresses[(Math.max(1, Math.floor(attempt) || 1) - 1) % addresses.length] : null;
+}
+
+export function modelProxyOptions(proxyUrl, endpoint, address) {
+  const url = new URL(endpoint);
+  if (url.protocol !== "https:" || isIP(address) !== 4 || isIP(url.hostname)) throw new Error("Invalid model tunnel target");
+  const authority = address + ":" + (url.port || "443");
+  return {
+    uri: proxyUrl,
+    // Only CONNECT's destination changes. HTTP Host, SNI and certificate checks
+    // still use the configured endpoint. Never disable certificate validation.
+    requestTls: { servername: url.hostname, rejectUnauthorized: true },
+    clientFactory(origin, options) {
+      const pool = new Pool(origin, options);
+      const connect = pool.connect.bind(pool);
+      pool.connect = (options, callback) => connect({ ...options, path: authority, headers: { ...options.headers, host: authority } }, callback);
+      return pool;
+    },
+  };
+}
+
+export async function createModelDispatcher(endpoint, options = {}) {
+  if (!configuredProxy) return { dispatcher: undefined, route: "direct" };
+  const address = endpoint ? await resolveModelConnectAddress(endpoint, options) : null;
+  return { dispatcher: new ProxyAgent(address ? modelProxyOptions(configuredProxy, endpoint, address) : configuredProxy), route: address ? "proxy_ipv4" : "proxy" };
 }
 
 // Internal only: public-page requests use their own pinned CONNECT transport.

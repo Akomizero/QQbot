@@ -22,6 +22,7 @@ import { queueStickerDescription } from "./sticker-learning.js";
 import { getKnowledgeLearningStatus, flushKnowledgeLearning } from "./knowledge-learning.js";
 import { readModelDiagnostics } from "./model-diagnostics.js";
 import { readStickerPreferences, saveStickerPreferences } from "./sticker-preferences.js";
+import { readMemberImpressions, saveMemberImpression, forgetMemberImpression } from "./member-impressions.js";
 
 const publicRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const assets = new Map([
@@ -149,6 +150,7 @@ export async function startManagementServer({
   getOneBotStatus = () => ({ connected: false }),
   onLlmSettingsSaved,
   onGroupPersonaSaved,
+  onMemberImpressionChanged,
 } = {}) {
   loadEnvironment();
   const rawPort = process.env.QQBOT_WEB_PORT?.trim() || "3000";
@@ -264,6 +266,33 @@ export async function startManagementServer({
 
     if (url.pathname === "/api/model-diagnostics" && request.method === "GET") {
       sendJson(response, 200, { events: readModelDiagnostics() }); return;
+    }
+    if (url.pathname === "/api/member-impressions" || url.pathname === "/api/member-impressions/learn") {
+      try {
+        const groups = readAccessControl().groupIds;
+        if (request.method === "GET" && url.pathname === "/api/member-impressions") {
+          if (!groups.length) { sendJson(response, 200, { groups, groupId: null, members: [], revision: null, learning: null }); return; }
+          const groupId = knowledgeScope(url.searchParams.get("groupId") ?? groups[0]);
+          if (!groupId) throw new Error("请选择成员印象所属群。");
+          sendJson(response, 200, { groups, ...readMemberImpressions(groupId), learning: getKnowledgeLearningStatus().groups.find(state => state.groupId === groupId) ?? null }); return;
+        }
+        const body = await readJsonBody(request), groupId = knowledgeScope(body?.groupId);
+        if (!groupId) throw new Error("成员印象仅用于群聊，请选择一个群。");
+        if (request.method === "POST" && url.pathname.endsWith("/learn")) {
+          const settings = readLlmSettings();
+          if (!settings.memberImpressionsEnabled || !settings.memberImpressionsLearningEnabled) throw new Error("请先开启成员印象与自动积累。");
+          if (!getKnowledgeLearningStatus().groups.some(state => state.groupId === groupId && state.bufferedMessages > 0)) { sendJson(response, 409, { error: "本群当前没有可提炼的发言。请先让成员在群内表达偏好；重启不恢复原始聊天缓冲。" }); return; }
+          void flushKnowledgeLearning(groupId).catch(() => {});
+          sendJson(response, 202, { message: "已安排本群提炼，仍遵守共享的5分钟间隔与每天12次上限。稍后刷新成员印象。" }); return;
+        }
+        if (url.pathname.endsWith("/learn") || !["PUT", "DELETE"].includes(request.method)) { sendJson(response, 405, { error: "成员印象支持GET、PUT和DELETE。" }); return; }
+        if (typeof body?.revision !== "string") throw new Error("缺少修订号，请刷新后再保存。");
+        const result = request.method === "DELETE" ? forgetMemberImpression(groupId, body?.userId, body?.revision)
+          : saveMemberImpression(groupId, body?.userId, body?.profile, body?.revision);
+        try { onMemberImpressionChanged?.(groupId, body.userId); } catch {}
+        sendJson(response, 200, { groups, ...result, message: request.method === "DELETE" ? "已清除此成员印象，并暂停继续积累。" : "本群此成员的印象已保存。" });
+      } catch (error) { sendJson(response, error.statusCode ?? 400, { error: error.code ? "成员印象文件操作失败。" : error.message }); }
+      return;
     }
     if (url.pathname === "/api/sticker-preferences") {
       try {
@@ -503,7 +532,7 @@ export async function startManagementServer({
     if (url.pathname === "/api/features" && request.method === "PATCH") {
       try {
         const body = await readJsonBody(request);
-        const allowed = ["knowledgeEnabled", "knowledgeLearningEnabled", "stickersEnabled", "stickerLearningEnabled"];
+        const allowed = ["knowledgeEnabled", "knowledgeLearningEnabled", "memberImpressionsEnabled", "memberImpressionsLearningEnabled", "stickersEnabled", "stickerLearningEnabled"];
         if (!body || !Object.keys(body).length || Object.entries(body).some(([key, value]) => !allowed.includes(key) || typeof value !== "boolean")) {
           sendJson(response, 400, { error: "功能开关格式不正确。" }); return;
         }
@@ -555,7 +584,7 @@ export async function startManagementServer({
             }
           }
 
-          const settings = writeLlmSettings(body.settings);
+          const settings = writeLlmSettings({ ...readLlmSettings(), ...body.settings });
           if (keyAction === "clear") updateLlmApiKey(null);
           if (keyAction === "set") updateLlmApiKey(requestedApiKey);
           try { onLlmSettingsSaved?.(settings); } catch {}

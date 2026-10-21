@@ -1,3 +1,4 @@
+import { groupMemberContextSince } from "./member-impressions.js";
 const groups = new Map();
 const ttl = 15 * 60_000;
 const sensitive = /(?:sk-[a-z\d]{12,}|tvly-|api.?key|密钥|密码|cookie|sessdata|身份证|手机号|家庭住址|\b\d{11,}\b)/iu;
@@ -11,7 +12,10 @@ function stateFor(groupId) {
     groups.set(groupId, { lines: [], updatedAt: now, bot: null, warmedAt: 0, warming: null });
   }
   const state = groups.get(groupId);
-  state.lines = state.lines.filter((line) => now - line.at < ttl);
+  let since = 0;
+  try { since = groupMemberContextSince(groupId); } catch { since = now; }
+  state.lines = state.lines.filter((line) => now - line.at < ttl && line.at > since);
+  if (state.bot?.at <= since) state.bot = null;
   return state;
 }
 

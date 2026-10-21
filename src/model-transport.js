@@ -1,6 +1,5 @@
 import { createModelDispatcher } from "./network-proxy.js";
 import { withModelOperation, recordModelDiagnostic } from "./model-diagnostics.js";
-import { getConfiguredProxyUrl } from "./network-proxy.js";
 
 const retryableCodes = new Set(["ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENOTFOUND", "ETIMEDOUT", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT"]);
 let requestSequence = 0;
@@ -14,11 +13,10 @@ async function fetchModelInternal(endpoint, { modelRetries = true, modelAttempt 
   const requestId = ++requestSequence;
   const attempts = modelRetries ? 3 : 1;
   const firstAttempt = Number.isInteger(modelAttempt) && modelAttempt > 0 && modelAttempt < 100 ? modelAttempt : 1;
-  const route = getConfiguredProxyUrl() ? "proxy" : "direct";
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const startedAt = Date.now();
     // A retry uses a new proxy tunnel instead of a potentially broken pooled socket.
-    const dispatcher = createModelDispatcher();
+    const { dispatcher, route } = await createModelDispatcher(endpoint, { attempt: firstAttempt + attempt, signal: options.signal });
     try {
       recordModelDiagnostic("start", { attempt: firstAttempt + attempt, route });
       const response = await fetch(endpoint, { ...options, ...(dispatcher ? { dispatcher } : {}) });
@@ -38,7 +36,8 @@ async function fetchModelInternal(endpoint, { modelRetries = true, modelAttempt 
       const code = retryableCodes.has(rawCode) ? rawCode : "FETCH_FAILED";
       const retry = attempt < attempts - 1 && retryableCodes.has(code) && !options.signal?.aborted;
       const timeout = options.signal?.aborted || error?.name === "TimeoutError";
-      const phase = timeout ? "timeout" : /CERT|TLS|SSL/u.test(String(rawCode)) ? "tls" : /EAI_|ENOTFOUND/u.test(String(rawCode)) ? "dns" : "connect";
+      const tlsHandshake = /before secure TLS connection|TLS handshake/iu.test(String(error?.cause?.message ?? ""));
+      const phase = timeout ? "timeout" : tlsHandshake || /CERT|TLS|SSL/u.test(String(rawCode)) ? "tls" : /EAI_|ENOTFOUND/u.test(String(rawCode)) ? "dns" : "connect";
       recordModelDiagnostic("transport", { code: timeout ? "TIMEOUT" : code, phase, route, attempt: firstAttempt + attempt, elapsedMs: Date.now() - startedAt });
       // Log only a fixed error code, never URLs, headers, keys, image data or prompts.
       console.warn(`${logTime()} 模型请求 ${requestId}（第${firstAttempt + attempt}次）连接失败：${code}，耗时${Date.now() - startedAt}ms${retry ? "，稍后重试。" : "。"}`);

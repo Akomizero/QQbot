@@ -72,6 +72,7 @@
           <button type="button" role="tab" data-page="chat">聊天设置</button>
           <button type="button" role="tab" data-page="personas">分群人设</button>
           <button type="button" role="tab" data-page="knowledge">知识库</button>
+          <button type="button" role="tab" data-page="members">成员印象</button>
           <button type="button" role="tab" data-page="stickers">表情包</button>
           <button type="button" role="tab" data-page="access">群与权限</button>
           <button type="button" role="tab" data-page="commands">快捷指令</button>
@@ -432,6 +433,28 @@
           </div>
         </section>
 
+        <section class="settings-panel" id="page-members" data-management-page="members" role="tabpanel" aria-label="按群成员的长期印象" hidden>
+          <div class="settings-heading"><div><p class="eyebrow">MEMBER IMPRESSIONS</p><h2>成员长期印象</h2><p>按群号和QQ号分别积累兴趣、娱乐偏好、称呼与互动习惯；同名成员不会合并，不用于其他群或私聊。</p></div><button class="button button-quiet" id="refresh-members" type="button">刷新</button></div>
+          <div class="knowledge-switches">
+            <div class="settings-field settings-toggle"><label for="member-impressions-enabled"><input id="member-impressions-enabled" type="checkbox" checked>在相关对话中使用本群成员印象</label></div>
+            <div class="settings-field settings-toggle"><label for="member-impressions-learning-enabled"><input id="member-impressions-learning-enabled" type="checkbox" checked>从群友明确自述中积累</label><p class="field-hint">明确说“记住”的非敏感自述可直接启用，普通自述先待确认；不把转述或引用他人的话记给发言者。与知识提炼共用每群5分钟间隔、每天12次额度，不额外逐条调用模型。</p></div>
+          </div>
+          <div class="member-toolbar"><div class="settings-field"><label for="member-group">所属群</label><select id="member-group"></select></div><input id="member-filter" aria-label="搜索成员昵称或QQ号" placeholder="搜索昵称或QQ号"><button class="button button-quiet" id="extract-member-impressions" type="button">提炼当前缓冲</button><button class="button button-primary" id="add-member" type="button">添加成员</button></div>
+          <p id="member-learning-status" class="field-hint" aria-live="polite">正在读取本群积累状态。</p><p id="member-count" class="field-hint"></p>
+          <div class="member-layout"><div id="member-list" class="command-list"></div>
+            <form id="member-form" class="knowledge-editor" hidden>
+              <h3 id="member-editor-title">成员印象</h3>
+              <div class="settings-field"><label for="member-user-id">成员QQ号</label><input id="member-user-id" inputmode="numeric" pattern="[0-9]{1,32}" maxlength="32" required></div>
+              <div class="settings-field"><label for="member-name">显示昵称</label><input id="member-name" maxlength="40" placeholder="昵称只用于显示，身份以QQ号区分"></div>
+              <div class="settings-field settings-toggle"><label><input id="member-profile-enabled" type="checkbox" checked>使用此成员的已确认印象</label><label><input id="member-learning-enabled" type="checkbox" checked>继续为此成员积累</label></div>
+              <div id="member-facts"></div><button class="button button-quiet" id="add-member-fact" type="button">添加一条印象</button>
+              <p class="field-hint">只记录非敏感的兴趣、娱乐偏好、称呼与互动习惯。拒绝/删除的主题不会自动重新加入；确认修正候选后停用旧版本。每人最多20条。</p>
+              <div class="form-error" id="member-error" role="alert" hidden></div>
+              <div class="form-actions"><button class="button button-primary" type="submit">保存成员</button><button class="button button-quiet" id="cancel-member" type="button">关闭</button><button class="button button-quiet" id="forget-member" type="button">清除并暂停积累</button></div>
+            </form>
+          </div>
+          <p class="field-hint">成员可在本群 @bot 后说“忘记我”，清除自己的印象并暂停积累；说“继续记住我”可恢复。清除保留最小QQ号和暂停标记，防止后台旧任务重新写回，旧印象不会恢复。不开启历史聊天回填。</p>
+        </section>
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
         </div>
       </main>

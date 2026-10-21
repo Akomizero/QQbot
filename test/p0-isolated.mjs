@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createServer, request as httpRequest } from "node:http";
 import { spawnSync } from "node:child_process";
 import sharp from "sharp";
+import { createHash, randomUUID } from "node:crypto";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 await mkdir(join(root, ".local"), { recursive: true });
@@ -32,13 +33,43 @@ async function test(name, task) {
 const config = await load("llm-settings-store.js");
 const access = await load("access-control-store.js");
 const base = { ...config.DEFAULT_LLM_SETTINGS, apiEndpoint: "https://fixture.invalid/v1/chat/completions", model: "fixture-model", memory: "", personality: "测试助手", expressionStyle: "简短回答", systemPrompt: "这是隔离验证。", botAliases: ["肥鱼"],
-  searchEnabled: false, videoUnderstandingEnabled: false, proactiveChatEnabled: false, stickerLearningEnabled: false, knowledgeLearningEnabled: false, stickersEnabled: false, characterRecognitionEnabled: false };
+  searchEnabled: false, videoUnderstandingEnabled: false, proactiveChatEnabled: false, stickerLearningEnabled: false, knowledgeLearningEnabled: false, memberImpressionsEnabled: false, memberImpressionsLearningEnabled: false, stickersEnabled: false, characterRecognitionEnabled: false };
 config.writeLlmSettings(base); access.writeAccessControl({ groupIds: ["111", "222", "333"], userIds: [] });
 const llm = await load("llm.js"), diagnostics = await load("model-diagnostics.js");
 let fetchCount = 0, responder = () => Response.json({ choices: [{ finish_reason: "stop", message: { content: "隔离回复" } }] });
 globalThis.fetch = async (url, options) => { assert.equal(new URL(url).hostname, "fixture.invalid", "Isolated fixture must never reach another host"); fetchCount++; return responder(options); };
 const reply = (extra = {}) => { fetchCount = 0; clock += 11000; return llm.getLlmReply({ apiKey: "isolated-fixture-only-key", settings: base, userId: "fixture", senderQQId: "444", userMessage: "SYNTHETIC_SECRET_DO_NOT_SAVE", queued: true, ...extra }); };
 const payload = (content = "隔离回复", finish = "stop") => Response.json({ choices: [{ finish_reason: finish, message: { content } }] });
+
+const modelProxy = await load("network-proxy.js");
+await test("model proxy resolves IPv4 and rotates addresses within the existing retry budget", async () => {
+  const resolver = async () => ["203.0.113.10", "2001:db8::1", "203.0.113.11", "203.0.113.10"];
+  assert.equal(await modelProxy.resolveModelConnectAddress("https://model.example/v1/chat/completions", { resolver }), "203.0.113.10");
+  assert.equal(await modelProxy.resolveModelConnectAddress("https://model.example/v1/chat/completions", { resolver, attempt: 2 }), "203.0.113.11");
+});
+await test("model proxy retains the endpoint TLS identity and certificate validation", async () => {
+  const options = modelProxy.modelProxyOptions("http://127.0.0.1:7890", "https://model.example:8443/v1/chat/completions", "203.0.113.10");
+  assert.equal(options.requestTls.servername, "model.example"); assert.equal(options.requestTls.rejectUnauthorized, true);
+  assert.throws(() => modelProxy.modelProxyOptions("http://127.0.0.1:7890", "https://model.example", "not-an-ip"));
+});
+await test("model proxy CONNECT authority and Host both use the resolved address", async () => {
+  let seen;
+  const proxy = createServer(); proxy.on("connect", (request, socket) => { seen = { path: request.url, host: request.headers.host }; socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); });
+  await new Promise(resolve => proxy.listen(0, "127.0.0.1", resolve));
+  const origin = new URL(`http://127.0.0.1:${proxy.address().port}`);
+  const options = modelProxy.modelProxyOptions(origin.href, "https://model.example:8443", "203.0.113.10");
+  const pool = options.clientFactory(origin, {});
+  try {
+    const result = await pool.connect({ path: "model.example:8443", headers: { host: "model.example:8443" } }); result.socket?.destroy();
+    assert.deepEqual(seen, { path: "203.0.113.10:8443", host: "203.0.113.10:8443" });
+  } finally { await pool.destroy(); await new Promise(resolve => proxy.close(resolve)); }
+});
+await test("model DNS failure falls back to the configured proxy and honors cancellation", async () => {
+  assert.equal(await modelProxy.resolveModelConnectAddress("https://model.example", { resolver: async () => { throw Error("DNS unavailable"); } }), null);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(modelProxy.resolveModelConnectAddress("https://model.example", { signal: controller.signal }));
+  assert.equal(await modelProxy.resolveModelConnectAddress("http://127.0.0.1:3010", { resolver: () => { throw Error("Must not resolve"); } }), null);
+});
 
 await test("model success and correlated diagnostics", async () => { responder = () => payload(); assert.equal((await reply()).reply, "隔离回复"); const events = diagnostics.readModelDiagnostics(); assert.equal(new Set(events.slice(-3).map(x => x.id)).size, 1); });
 await test("connection reset recovers with one retry", async () => { responder = () => { if (fetchCount < 2) throw new TypeError("synthetic reset", { cause: { code: "ECONNRESET" } }); return payload(); }; assert.ok((await reply()).reply); assert.equal(fetchCount, 2); });
@@ -115,14 +146,49 @@ await test("knowledge scope and candidate search exclusion", async () => { asser
 await test("persisted learning status survives a fresh process", async () => { const url = pathToFileURL(join(fixture, "src", "knowledge-learning.js")).href; const child = spawnSync(process.execPath, ["--input-type=module", "-e", `const m = await import(${JSON.stringify(url)}); console.log(JSON.stringify(m.getKnowledgeLearningStatus()));`], { encoding: "utf8", windowsHide: true }); assert.equal(child.status, 0); const state = JSON.parse(child.stdout).groups.find(x => x.groupId === "222"); assert.ok(state.lastSavedAt); assert.equal(state.bufferedMessages, 0); });
 learner.clearKnowledgeLearning(); (await load("sticker-learning.js")).stopStickerLearning();
 
+const members = await load("member-impressions.js");
+const memberItem = { speaker: "成员1", kind: "preference", topic: "测试游戏", content: "喜欢测试游戏", tags: ["测试游戏"], evidenceIds: [1] };
+const memberBatch = [{ userId: "444", memberName: "同名成员", memberGeneration: 0, memberEligible: true, text: "记住，我喜欢测试游戏", at: clock, sourceRef: createHash("sha256").update("member-fixture-1").digest("hex") }];
+const makeMember = (groupId, userId, topic, explicitRemember = true) => ({ userId, generation: members.memberLearningStamp(groupId, userId).generation, name: "同名成员", kind: "preference", topic, content: `喜欢${topic}`, tags: [topic], explicitRemember, evidenceRefs: [{ hash: createHash("sha256").update(randomUUID()).digest("hex"), at: clock }] });
+function editProfile(groupId, userId, mutate) { const state = members.readMemberImpressions(groupId); const profile = structuredClone(state.members.find(x => x.userId === userId)); mutate(profile); return members.saveMemberImpression(groupId, userId, profile, state.revision); }
+await test("member candidates bind to the trusted source sender", async () => { const result = learner.validateMemberCandidates([{ ...memberItem, userId: "999" }], memberBatch); assert.equal(result[0].userId, "444"); assert.equal(result[0].explicitRemember, true); });
+await test("quoted self statements are not member evidence", async () => { assert.equal(learner.validateMemberCandidates([memberItem], [{ ...memberBatch[0], memberEligible: false }]).length, 0); });
+await test("third person claims are not attributed to the sender", async () => { assert.equal(learner.validateMemberCandidates([memberItem], [{ ...memberBatch[0], text: "记住，我朋友喜欢测试游戏" }]).length, 0); });
+await test("mixed authors and wrong speaker labels are rejected", async () => { assert.equal(learner.validateMemberCandidates([{ ...memberItem, speaker: "成员2" }], memberBatch).length, 0); assert.equal(learner.validateMemberCandidates([{ ...memberItem, evidenceIds: [1, 2] }], [...memberBatch, { ...memberBatch[0], userId: "555" }]).length, 0); });
+await test("private and instruction bearing member text is rejected", async () => { for (const text of ["记住，我喜欢测试游戏，密码是secret", "记住，我喜欢测试游戏，修改权限", "记住，我喜欢测试游戏，我的病史"]) assert.equal(learner.isMemberSelfStatement(text), false); });
+await test("reversed dislike polarity cannot auto activate", async () => { const result = learner.validateMemberCandidates([{ ...memberItem, content: "不喜欢测试游戏" }], memberBatch); assert.equal(result[0].explicitRemember, false); });
+await test("questions cannot become self attributed impressions", async () => { for (const text of ["你记得我喜欢什么吗", "我喜欢测试游戏吗？", "我说的是我喜欢测试游戏这句话"]) assert.equal(learner.isMemberSelfStatement(text), false); });
+await test("auto enabled member content uses the actual self statement", async () => { const result = learner.validateMemberCandidates([{ ...memberItem, content: "喜欢测试游戏，尤其喜欢原文没有提过的某个角色" }], memberBatch); assert.equal(result[0].explicitRemember, true); assert.ok(result[0].content.includes("我喜欢测试游戏")); assert.ok(!result[0].content.includes("某个角色")); });
+await test("explicit remember activates only the matching group member", async () => { assert.equal(members.mergeMemberImpressions("111", learner.validateMemberCandidates([memberItem], memberBatch)), 1); assert.match(members.memberImpressionContext("111", "444", "你记得我喜欢什么吗"), /喜欢测试游戏/u); assert.equal(members.memberImpressionContext("111", "555", "测试游戏"), null); assert.equal(members.memberImpressionContext("222", "444", "测试游戏"), null); assert.equal(members.memberImpressionContext(null, "444", "测试游戏"), null); });
+await test("same display names never merge different QQ members", async () => { members.mergeMemberImpressions("111", [makeMember("111", "555", "测试音乐")]); assert.equal(members.readMemberImpressions("111").members.length, 2); assert.match(members.memberImpressionContext("111", "555", "测试音乐"), /喜欢测试音乐/u); assert.ok(!members.memberImpressionContext("111", "555", "我的兴趣").includes("测试游戏")); });
+await test("member impressions persist in a fresh process", async () => { const url = pathToFileURL(join(fixture, "src/member-impressions.js")).href; const child = spawnSync(process.execPath, ["--input-type=module", "-e", `const m=await import(${JSON.stringify(url)});console.log(m.memberImpressionContext("111","444","测试游戏"));`], { encoding: "utf8", windowsHide: true }); assert.equal(child.status, 0); assert.match(child.stdout, /喜欢测试游戏/u); });
+await test("ordinary self statements wait for administrator review", async () => { members.mergeMemberImpressions("222", [makeMember("222", "444", "测试动画", false)]); assert.equal(members.memberImpressionContext("222", "444", "测试动画"), null); const state = editProfile("222", "444", profile => { profile.facts[0].reviewStatus = "approved"; profile.facts[0].enabled = true; }); assert.match(members.memberImpressionContext("222", "444", "测试动画"), /喜欢测试动画/u); assert.ok(state.revision); });
+await test("member revision conflicts do not overwrite newer data", async () => { const state = members.readMemberImpressions("222"), profile = structuredClone(state.members[0]); editProfile("222", "444", value => { value.name = "新显示名"; }); assert.throws(() => members.saveMemberImpression("222", "444", profile, state.revision), error => error.statusCode === 409); });
+await test("deleting a fact blocks relearning its topic", async () => { editProfile("111", "555", profile => { profile.facts = []; }); assert.equal(members.memberImpressionContext("111", "555", "测试音乐"), null); assert.equal(members.mergeMemberImpressions("111", [makeMember("111", "555", "测试音乐")]), 0); });
+await test("pausing member learning preserves approved recall", async () => { editProfile("222", "444", profile => { profile.learningEnabled = false; }); assert.match(members.memberImpressionContext("222", "444", "测试动画"), /测试动画/u); assert.equal(members.mergeMemberImpressions("222", [makeMember("222", "444", "测试新主题")]), 0); });
+await test("disabling a member prevents recall", async () => { editProfile("222", "444", profile => { profile.enabled = false; }); assert.equal(members.memberImpressionContext("222", "444", "测试动画"), null); });
+await test("LLM receives only its current group and sender impressions", async () => { let prompt; responder = options => { prompt = JSON.stringify(JSON.parse(options.body).messages); return payload(); }; await reply({ groupId: "111", senderQQId: "444", userMessage: "测试游戏", settings: { ...base, memberImpressionsEnabled: true } }); assert.match(prompt, /喜欢测试游戏/u); await reply({ groupId: "111", senderQQId: "555", userMessage: "测试游戏", settings: { ...base, memberImpressionsEnabled: true } }); assert.ok(!prompt.includes("喜欢测试游戏")); });
+await test("forget prevents an in flight extraction from restoring facts", async () => { const candidate = makeMember("111", "444", "旧任务主题"); members.forgetMemberImpression("111", "444"); assert.equal(members.memberImpressionContext("111", "444", "测试游戏"), null); assert.equal(members.mergeMemberImpressions("111", [candidate]), 0); assert.equal(members.memberLearningStamp("111", "444").learningEnabled, false); members.resumeMemberImpression("111", "444"); assert.equal(members.mergeMemberImpressions("111", [candidate]), 0); assert.equal(members.readMemberImpressions("111").members.find(x => x.userId === "444").facts.length, 0); clock += 1000; });
+await test("forgetting one group preserves the other group", async () => { const profile = members.readMemberImpressions("222").members.find(x => x.userId === "444"); assert.equal(profile.facts.length, 1); });
+await test("member forget cannot be triggered by a negated command", async () => { assert.equal(members.memberMemoryCommand("不要忘记我"), null); assert.equal(members.memberMemoryCommand("肥鱼，忘记我"), "forget"); assert.equal(members.memberMemoryCommand("继续记住我"), "resume"); });
+await test("forgotten context cannot be imported again from QQ history", async () => { context.clearGroupConversations("111"); await context.warmGroupContext({ groupId: "111", selfId: "999", sendAction: async () => ({ messages: [{ group_id: "111", user_id: "444", message_id: "-812", time: Math.floor((clock - 2000) / 1000), message: [{ type: "text", data: { text: "喜欢测试游戏" } }] }] }) }); assert.ok(!JSON.stringify(context.recentGroupContext("111")).includes("喜欢测试游戏")); });
+await test("member learning shares one knowledge extraction model call", async () => { config.writeLlmSettings({ ...base, knowledgeEnabled: false, memberImpressionsEnabled: true, memberImpressionsLearningEnabled: true }); fetchCount = 0; responder = () => payload(JSON.stringify({ knowledge: [], impressions: [{ ...memberItem, topic: "测试动漫", content: "喜欢测试动漫", tags: ["测试动漫"] }] })); learner.observeKnowledgeMessage({ groupId: "333", userId: "777", text: "记住，我喜欢测试动漫", settings: config.readLlmSettings(), messageId: "synthetic-member-learning", memberName: "测试成员" }); await learner.flushKnowledgeLearning("333"); assert.equal(fetchCount, 1); assert.match(members.memberImpressionContext("333", "777", "测试动漫"), /测试动漫/u); assert.equal(learner.getKnowledgeLearningStatus().groups.find(x => x.groupId === "333").lastMemberAddedCount, 1); });
+await test("a cleared member cannot receive a stale queued model reply", async () => { config.writeLlmSettings({ ...base, memberImpressionsEnabled: true, memberImpressionsLearningEnabled: false }); members.mergeMemberImpressions("111", [makeMember("111", "444", "测试新游戏")]); messagesSent = []; responder = () => { members.forgetMemberImpression("111", "444"); return payload("包含旧印象的测试回复"); }; await main.handleMessage(inbound([{ type: "at", data: { qq: "999" } }, { type: "text", data: { text: "测试新游戏" } }]), { sendMessage: fakeOneBot }, {}); assert.equal(messagesSent.length, 0); });
+await test("real handler forgets only the authenticated sender without model use", async () => { messagesSent = []; fetchCount = 0; await main.handleMessage(inbound([{ type: "at", data: { qq: "999" } }, { type: "text", data: { text: "忘记我" } }]), { sendMessage: fakeOneBot }, {}); assert.equal(fetchCount, 0); assert.equal(messagesSent.length, 1); assert.match(messagesSent[0].message, /已清除本群/u); assert.equal(members.memberLearningStamp("111", "444").learningEnabled, false); assert.equal(members.readMemberImpressions("222").members.find(x => x.userId === "444").facts.length, 1); });
+config.writeLlmSettings(base); learner.clearKnowledgeLearning();
+
 let server;
 await test("management API authentication and scoped reads", async () => {
   const probe = createServer(); await new Promise(resolve => probe.listen(0, "127.0.0.1", resolve)); const port = probe.address().port; await new Promise(resolve => probe.close(resolve)); process.env.QQBOT_WEB_PORT = String(port);
   server = await (await load("web.js")).startManagementServer({ getOneBotStatus: () => ({ connected: true }) });
-  const api = (path, method = "GET", body = null, cookie = "") => new Promise((resolve, reject) => { const req = httpRequest({ hostname: "127.0.0.1", port, path, method, headers: { ...(body ? { "content-type": "application/json" } : {}), ...(cookie ? { cookie } : {}) } }, res => { let raw = ""; res.on("data", chunk => raw += chunk); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, data: JSON.parse(raw) })); }); req.on("error", reject); req.end(body ? JSON.stringify(body) : undefined); });
+  const api = (path, method = "GET", body = null, cookie = "") => new Promise((resolve, reject) => { const req = httpRequest({ hostname: "127.0.0.1", port, path, method, headers: { ...(body ? { "content-type": "application/json", "content-length": Buffer.byteLength(JSON.stringify(body)) } : {}), ...(cookie ? { cookie } : {}) } }, res => { let raw = ""; res.on("data", chunk => raw += chunk); res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, data: JSON.parse(raw) })); }); req.on("error", reject); req.end(body ? JSON.stringify(body) : undefined); });
   assert.equal((await api("/api/model-diagnostics")).status, 401);
+  assert.equal((await api("/api/member-impressions?groupId=111")).status, 401);
   const setup = await api("/api/auth/setup", "POST", { password: "isolatedFixturePassword2026!" }); assert.equal(setup.status, 201); const cookie = setup.headers["set-cookie"][0].split(";")[0];
   assert.equal((await api("/api/model-diagnostics", "GET", null, cookie)).status, 200);
+  await test("member API rejects unauthorized groups", async () => { assert.equal((await api("/api/member-impressions?groupId=9999", "GET", null, cookie)).status, 404); });
+  await test("member API reads only the chosen group", async () => { const result = await api("/api/member-impressions?groupId=333", "GET", null, cookie); assert.equal(result.status, 200); assert.equal(result.data.groupId, "333"); assert.deepEqual(result.data.members.map(x => x.userId), ["777"]); });
+  await test("member API clears with revision protection", async () => { const state = (await api("/api/member-impressions?groupId=333", "GET", null, cookie)).data; const cleared = await api("/api/member-impressions", "DELETE", { groupId: "333", userId: "777", revision: state.revision }, cookie); assert.equal(cleared.status, 200); assert.equal(cleared.data.members[0].facts.length, 0); assert.equal(cleared.data.members[0].learningEnabled, false); assert.equal((await api("/api/member-impressions", "DELETE", { groupId: "333", userId: "777", revision: state.revision }, cookie)).status, 409); });
   assert.equal((await api("/api/sticker-preferences?groupId=9999", "GET", null, cookie)).status, 404);
   const group = await api("/api/knowledge?groupId=222", "GET", null, cookie); assert.equal(group.status, 200); assert.ok(group.data.entries.every(x => x.groupId === "222"));
   assert.equal((await api("/api/knowledge/learn", "POST", { groupId: "111" }, cookie)).status, 409);
