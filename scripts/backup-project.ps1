@@ -19,7 +19,7 @@ function Include-File([string]$relative) {
     if (-not $absolute.StartsWith($projectRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Backup source escaped the project.' }
     $files[$relative.Replace('\','/')] = $absolute
 }
-foreach ($folder in @('src','public','data','docs','scripts','test')) {
+foreach ($folder in @('src','public','data','docs','scripts','test','tools','.local\chatgpt-images','.local\reply-recovery','.local\recovery-deliveries')) {
     $folderPath = Join-Path $projectRoot $folder
     if (Test-Path -LiteralPath $folderPath -PathType Container) {
         foreach ($item in Get-ChildItem -LiteralPath $folderPath -File -Recurse -Force) {
@@ -29,11 +29,20 @@ foreach ($folder in @('src','public','data','docs','scripts','test')) {
 }
 foreach ($relative in @('package.json','package-lock.json','README.md','.env','.env.example','.gitignore',
     '.local\admin-auth.json','.local\admin-auth.setup.lock','.local\proactive-chat-state.json','.local\sticker-learning-state.json',
+    '.local\power-settings-before-20261021.json',
     '.local\knowledge-learning-state.json','.local\model-diagnostics.json',
     '.local\model-proxy.json','.local\diagnostic-deliveries-20261021.json',
     '.local\model-private-pool-health-check-20261021.json','.local\dedicated-bot-route-check-20261021.json',
     '.local\image-context-ui-20261021.png','.local\image-followup-live-check-20261021.json',
     '.local\verify-image-followup-live-20261021.mjs',
+    '.local\member-dialogue-recovery-20261021.json',
+    '.local\member-dialogue-ui-20261021.png',
+    '.local\forward-read-metadata-20261021.json','.local\forward-reading-ui-20261021.png',
+    '.local\serper-source-ui-20261021.png','.local\serper-source-read-20261021.json',
+    '.local\forward-media-inspection-20261021.json','.local\forward-media-repair-ui-20261021.png',
+    '.local\forward-complete-read-20261021.json','.local\forward-nine-image-ui-20261021.png',
+    '.local\serper-retry-live-read-20261021.json','.local\serper-recovery-delivery-20261021.json',
+    '.local\forward-recovery-delivery-20261021.json','.local\chatgpt-imagegen-ui-20261021.png',
     '.local\p0-check-metadata-20261021.json','.local\p0-live-check-metadata-20261021.json',
     '.local\p0-management-diagnostics-20261021.png',
     '.local\p0-check-metadata.json','.local\member-live-check-metadata-20261021.json','.local\member-impressions-ui-20261021.png',

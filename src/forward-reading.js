@@ -54,6 +54,7 @@ export async function prepareForwardReading(record, { describe, withImages, allo
         record.visualReadings.push(...result.images.map(item => ({ number: item.number, summary: safe(item.summary) })));
       });
     } catch (error) {
+      if (["PROVIDER_REFUSAL", "AUTH_REJECTED", "PARAMETERS"].includes(error?.code)) record.nonRetryableImageFailure = true;
       // Retry loading individually when a bad file or a pair size limit hid its neighbour.
       if ((!loaded && refs.length > 1) || (error?.code === "FORWARD_BATCH_INVALID" && refs.length > 2)) {
         const middle = Math.ceil(refs.length / 2);

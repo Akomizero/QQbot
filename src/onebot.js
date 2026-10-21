@@ -211,6 +211,7 @@ export function createOneBotBridge({ port, path, accessToken, onMessage, onStatu
   });
 
   return {
+    sendMessage: sendAction,
     start() {
       if (closed) return Promise.reject(new Error("OneBot bridge is closed"));
       return new Promise((resolve, reject) => {

@@ -113,12 +113,14 @@ export async function readSummaryPages(values, { apiKey, provider = "tavily" } =
   return {pages,unread};
 }
 
-export async function readSummarySource(intent, { apiKey,settings }) {
+export async function readSummarySource(intent, { apiKey,settings,now=Date.now() }) {
   if(intent.kind==="text")return {topic:"文字总结",articles:[{title:"用户提供的文字",url:null,publishedAt:null,official:false,channel:"用户提供的文字",...boundedContent(intent.suppliedText,true)}],notes:[],checkedAt:new Date().toISOString(),adapter:"text",latestRequested:false};
   if(!intent.subject&&!intent.references.length)throw new SummaryReadError("请告诉我想总结的主题、发送网页链接，或贴出一段文字。例如「总结近期AI新闻」或「总结这篇文章＋链接」。");
   if(!intent.references.length && /^(?:这篇文章|这个网页|这段内容|这份资料|这些内容|以下内容|下面内容)$/u.test(intent.subject))throw new SummaryReadError("请把文章链接或原文一起发来，我才能总结。");
-  const dateWindow=summaryDateWindow(intent);
-  const key=JSON.stringify([settings.searchProvider,intent.kind,intent.subject,intent.references,intent.latest,dateWindow,Boolean(apiKey)]);
+  const dateWindow=summaryDateWindow(intent,{now});
+  const requestYear=new Date(now+8*3600_000).getUTCFullYear();
+  const searchSubject=intent.subject.replace(/明年/gu,`${requestYear+1}年`).replace(/今年/gu,`${requestYear}年`).replace(/去年/gu,`${requestYear-1}年`);
+  const key=JSON.stringify([settings.searchProvider,intent.kind,searchSubject,intent.references,intent.latest,dateWindow,Boolean(apiKey)]);
   const cached=summaryCache.get(key);if(cached&&cached.expiresAt>Date.now())return cached.result;
   if(intent.gameIntent && (/(?:游戏|steam|绝地[潜潛战戰]兵|地[狱獄][潜潛]兵|helldivers)/iu.test(intent.subject) || /https:\/\/(?:store\.steampowered\.com|steamcommunity\.com)\//iu.test(intent.gameIntent.reference ?? ""))) {
     try { const steam=await tryReadSteamSummary(intent.gameIntent);if(steam) {
@@ -129,7 +131,7 @@ export async function readSummarySource(intent, { apiKey,settings }) {
   let results;
   if(intent.references.length)results=intent.references.slice(0,pageLimit).map(url=>({url,title:null}));
   else {
-    const searched=await searchWeb({apiKey,provider:settings.searchProvider,query:`${intent.subject}${dateWindow?` 日期范围 ${dateWindow.start} 至 ${dateWindow.end}`:""}`,country:settings.searchCountry,language:settings.searchLanguage,
+    const searched=await searchWeb({apiKey,provider:settings.searchProvider,query:`${searchSubject}${dateWindow?` 日期范围 ${dateWindow.start} 至 ${dateWindow.end}`:""}`,country:settings.searchCountry,language:settings.searchLanguage,
       startDate:dateWindow?.start,endDate:dateWindow?.end});
     results=searched.results.filter(result=>result.kind!=="video").filter(result=>{try{publicPageUrl(result.url);return true;}catch{return false;}}).slice(0,pageLimit);
   }

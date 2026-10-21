@@ -22,6 +22,8 @@ import { createOneBotBridge } from "./onebot.js";
 import { recordProactiveReply, reserveProactiveEvaluation, recordProactiveWaiting, acknowledgeGroupReply } from "./proactive-chat-state.js";
 import { parseSearchIntent } from "./search-intent.js";
 import { closeSearchConnections } from "./search.js";
+import { parseImageGenerationIntent, generateChatGptImage, recordGeneratedImageDelivery, stopChatGptImageGeneration, ChatGptImageError } from "./chatgpt-imagegen.js";
+import { enqueueReplyRecovery, startReplyRecovery, recoveryStillAllowed } from "./reply-recovery.js";
 import { parseSummaryIntent } from "./content-summary.js";
 import { startManagementServer } from "./web.js";
 import { observeKnowledgeMessage, clearKnowledgeLearning } from "./knowledge-learning.js";
@@ -585,12 +587,22 @@ async function handleMessage(event, { sendMessage }, config) {
 async function handleAuthorizedMessage(event, { sendMessage }, config, authorized, accessControl) {
   if (authorized.scope === "group" && authorized.mentioned) cancelPendingGroupTurn(authorized.groupId);
 
-  const sendText = async (text) => sendMessage("send_msg", {
+  let recoveryForwardSourceMessageId = authorized.recoveryJob?.forwardSourceMessageId ?? null;
+  const temporaryFailure = text => /(?:暂时无法连接|(?:模型|网页搜索|Serper).{0,18}(?:超时|暂时出错|请求较多|暂时不可用)|模型回复.{0,12}(?:中断|超时)|转发消息暂时无法展开|这张图片暂时无法读取)/u.test(text);
+  const scheduleRecovery = code => {
+    if (authorized.recoveryJob) return;
+    try { return enqueueReplyRecovery({ event, authorized, code, forwardSourceMessageId: recoveryForwardSourceMessageId }); }
+    catch { console.warn("本次故障未能登记后台补发，请检查本机补发状态。"); }
+  };
+  const sendText = async (text) => {
+    if (authorized.recoveryJob) { const error = new Error("Recovery not ready"); error.recoveryRetryable = temporaryFailure(text); throw error; }
+    if (temporaryFailure(text) && scheduleRecovery("TRANSIENT_FAILURE")) text += "\n已登记后台重试，恢复后会补发这条回复。";
+    return sendMessage("send_msg", {
     message_type: authorized.scope,
     ...(authorized.scope === "group" ? { group_id: authorized.groupId } : { user_id: authorized.userId }),
     message: text,
     auto_escape: true,
-  });
+  }); };
 
   if (authorized.memberMemoryAction) {
     await sendText(authorized.memberMemoryAction === "forget" ? "已清除本群关于你的长期印象，并暂停继续积累。想恢复时可以对我说‘继续记住我’。"
@@ -613,9 +625,10 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
 
   const searchIntent = parseSearchIntent(authorized.content);
   const summaryIntent = parseSummaryIntent(authorized.content);
+  const imageGenerationIntent = parseImageGenerationIntent(authorized.content, settingsForGroup(readLlmSettings(), authorized.groupId).botAliases);
   let images = authorized.imageReference?.images ?? imageSegments(event.message);
   let imageRequested = images === null || images.length > 0;
-  if (authorized.scope === "group" && command.kind === "none"
+  if (!authorized.recoveryJob && !imageGenerationIntent && authorized.scope === "group" && command.kind === "none"
     && segmentsOf(event.message).every((segment) => ["text", "at", "image", "reply"].includes(segment?.type))) {
     try { observeKnowledgeMessage({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content.replaceAll("[QQ表情]", "").trim(), settings: readLlmSettings(),
       messageId: event.message_id, relatedStickerId: authorized.messageContext?.reply?.stickerId,
@@ -657,7 +670,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     return;
   }
 
-  if (command.kind === "unknown" && !searchIntent && !summaryIntent && !/^\/(?:看视频|看转发)(?:\s|$)/u.test(authorized.content)) {
+  if (command.kind === "unknown" && !imageGenerationIntent && !searchIntent && !summaryIntent && !/^\/(?:看视频|看转发)(?:\s|$)/u.test(authorized.content)) {
     try {
       await sendText("这个指令我还不认识。发送「帮助」查看可用指令。");
     } catch (error) {
@@ -670,6 +683,47 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
   try {
     settings = readLlmSettings();
   } catch {
+    return;
+  }
+
+  if (imageGenerationIntent) {
+    if (authorized.recoveryJob) return { status: "cancelled", recoveryRetryable: false };
+    if (!settings.chatgptImageGenerationEnabled) { await sendText("ChatGPT 网页生图尚未开启，请管理员在聊天设置中开启。"); return; }
+    const personaRevision = authorized.scope === "group" ? settingsForGroup(settings, authorized.groupId).groupPersonaRevision : null;
+    const generation = authorized.scope === "group" ? memberLearningStamp(authorized.groupId, authorized.userId).generation : null;
+    const allowed = () => {
+      const current = readLlmSettings(), access = readAccessControl();
+      return current.chatgptImageGenerationEnabled && (authorized.scope === "group"
+        ? access.groupIds.includes(authorized.groupId) && settingsForGroup(current, authorized.groupId).groupPersonaRevision === personaRevision
+          && memberLearningStamp(authorized.groupId, authorized.userId).generation === generation
+        : access.userIds.includes(authorized.userId));
+    };
+    let generated;
+    try {
+      if (!event.message_id) throw new ChatGptImageError("MESSAGE_ID", "这条画图请求缺少消息编号，请重新发送。");
+      let references = [];
+      if (imageRequested) {
+        if (!settings.visionEnabled || !Array.isArray(images) || images.length > MAX_IMAGE_COUNT) throw new ChatGptImageError("REFERENCES", "请开启图片识别，并一次最多发送两张参考图。");
+        await acquireImageSlot();
+        try { references = (await readIncomingImages(images, sendMessage)).map(image => image.dataUrl); }
+        finally { releaseImageSlot(); }
+      }
+      generated = await generateChatGptImage({ prompt: imageGenerationIntent.prompt,
+        sourceKey: `${event.self_id}:${authorized.scope}:${authorized.groupId ?? authorized.userId}:${event.message_id}`,
+        referenceDataUrls: references, allowed });
+      if (!allowed()) return;
+      recordGeneratedImageDelivery(generated.id, "sending");
+      const delivered = await sendMessage("send_msg", { message_type: authorized.scope,
+        ...(authorized.scope === "group" ? { group_id: authorized.groupId } : { user_id: authorized.userId }),
+        message: [{ type: "reply", data: { id: String(event.message_id) } },
+          { type: "text", data: { text: "画好啦～" } },
+          { type: "image", data: { file: `base64://${generated.bytes.toString("base64")}` } }], auto_escape: false }, allowed);
+      recordGeneratedImageDelivery(generated.id, delivered?.cancelled ? "uncertain" : "delivered", delivered?.message_id);
+    } catch (error) {
+      if (generated) recordGeneratedImageDelivery(generated.id, "uncertain");
+      if (allowed() && error.code !== "CANCELLED") await sendText(error instanceof ChatGptImageError || error instanceof ImageInputError
+        ? error.message : "这次网页生图或图片发送没有完成，请管理员检查本机生图状态。");
+    }
     return;
   }
 
@@ -688,9 +742,10 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     await sendText("转发消息阅读当前已关闭，请管理员在聊天设置中开启。"); return;
   }
   if (settings.forwardReadingEnabled !== false) {
-    const source = await resolveForwardSource({ event, ...authorized, text: authorized.content, selfId: numericId(event.self_id),
+    const source = authorized.recoveryForwardMessage ?? await resolveForwardSource({ event, ...authorized, text: authorized.content, selfId: numericId(event.self_id),
       since: authorized.scope === "group" ? settingsForGroup(settings, authorized.groupId).groupPersonaSince : 0, sendAction: sendMessage });
     if (source) {
+      recoveryForwardSourceMessageId = source.messageId;
       try {
         forwardedMessages = await readForwardedMessages(source.message, { sendAction: sendMessage,
           imageNumbers: [...authorized.content.matchAll(/第\s*(\d{1,3})\s*张/gu)].map(match => Number(match[1])), allowed: () => {
@@ -720,7 +775,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
   if (!authorized.content && !searchIntent && !imageRequested && !forwardedMessages) return;
 
   const preloadedImageDataUrls = [];
-  if (authorized.scope === "group" && authorized.mentioned && !authorized.messageContext?.mentions.some(x => !x.isBot)) {
+  if (!authorized.recoveryJob && authorized.scope === "group" && authorized.mentioned && !authorized.messageContext?.mentions.some(x => !x.isBot)) {
     try {
       const feedback = noteStickerFeedback(authorized.groupId, authorized.content, authorized.messageContext?.reply?.stickerId);
       if (feedback && !feedback.ignored) {
@@ -730,8 +785,8 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     } catch { console.warn("本群表情偏好暂未保存。"); }
   }
   let preparedImages = [];
-  const tokenExchange = !forwardedMessages && /\btoken\s*来/iu.test(authorized.content) && imageRequested;
-  const explicitStickerRequest = !forwardedMessages && authorized.scope === "group" && authorized.mentioned && isStickerCollectionRequest(authorized.content);
+  const tokenExchange = !authorized.recoveryJob && !forwardedMessages && /\btoken\s*来/iu.test(authorized.content) && imageRequested;
+  const explicitStickerRequest = !authorized.recoveryJob && !forwardedMessages && authorized.scope === "group" && authorized.mentioned && isStickerCollectionRequest(authorized.content);
   let reservedImageSlot = false;
   let videoProgressTimer;
   let waitingForVideo = true;
@@ -837,10 +892,12 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       preloadedImageDataUrls,
       queued: true,
       followup: Boolean(authorized.followup),
-      conversationContext: authorized.scope === "group" && settings.conversationFollowupEnabled ? recentGroupContext(authorized.groupId, event.message_id) : [],
+      conversationContext: !authorized.recoveryJob && authorized.scope === "group" && settings.conversationFollowupEnabled ? recentGroupContext(authorized.groupId, event.message_id) : [],
       messageContext: authorized.messageContext,
       forwardedMessages,
+      requestTime: Number(event.time) * 1000,
       onVideoStart: () => {
+        if (authorized.recoveryJob) return;
         if (videoProgressTimer) return;
         videoProgressTimer = setTimeout(() => {
           if (!waitingForVideo) return;
@@ -851,6 +908,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
         videoProgressTimer.unref?.();
       },
       onSummaryStart: () => {
+        if (authorized.recoveryJob) return;
         if (videoProgressTimer) return;
         videoProgressTimer = setTimeout(() => {
           if (!waitingForVideo) return;
@@ -864,6 +922,12 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     });
     waitingForVideo = false;
     if (videoProgressTimer) clearTimeout(videoProgressTimer);
+    if (forwardedMessages?.failedImageNumbers?.length && !forwardedMessages.nonRetryableImageFailure) {
+      result.recoveryRetryable = true; result.errorCode = "FORWARD_IMAGE_READ";
+      if (authorized.recoveryJob) result.status = "forward-partial";
+    }
+    if (authorized.recoveryJob) return result.recoveryRetryable && result.status === "ok" ? { ...result, status: "recovery-not-ready" } : result;
+    if (result.recoveryRetryable && scheduleRecovery(result.errorCode || "TRANSIENT_FAILURE") && result.reply) result.reply += "\n已登记后台重试，恢复后会补发这条回复。";
     if (result.reply || result.stickerId) {
       const latestAccess = readAccessControl();
       if (authorized.scope === "group" ? !latestAccess.groupIds.includes(authorized.groupId) : !latestAccess.userIds.includes(authorized.userId)) return;
@@ -884,6 +948,10 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       await sendText("我现在正在处理其他问题，请过一会儿再试。");
     }
   } catch (error) {
+    if (authorized.recoveryJob) {
+      if (error instanceof LlmRequestError) error.recoveryRetryable = /^(?:CONNECTION|TIMEOUT|BODY_|RATE_LIMITED|UPSTREAM_HTTP|EMPTY_|TOOLS_UNFINISHED|TRUNCATED)/u.test(error.code);
+      throw error;
+    }
     if (error instanceof LlmRequestError) {
       try {
         await sendText(error.message);
@@ -897,8 +965,36 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     waitingForVideo = false;
     if (videoProgressTimer) clearTimeout(videoProgressTimer);
     if (reservedImageSlot) releaseImageSlot();
-    if (!forwardedMessages && authorized.scope === "group" && preparedImages.length) void learnIncomingStickers({ groupId: authorized.groupId, images: preparedImages });
+    if (!authorized.recoveryJob && !forwardedMessages && authorized.scope === "group" && preparedImages.length) void learnIncomingStickers({ groupId: authorized.groupId, images: preparedImages });
   }
+}
+
+async function runRecoveredRequest(job, allowed, sendMessage, config) {
+  return queueConversationReply(`${job.scope}:${job.peerId}`, async () => {
+    if (!allowed()) return null;
+    const native = await sendMessage("get_msg", { message_id: job.sourceMessageId });
+    if (String(native.message_id) !== job.sourceMessageId || String(native.user_id ?? native.sender?.user_id) !== job.userId
+      || (job.scope === "group" ? String(native.group_id) !== job.peerId : Boolean(native.group_id))) { const error = new Error("Recovery source changed"); error.recoveryRetryable = false; throw error; }
+    const event = { ...native, post_type: "message", message_type: job.scope, sub_type: "friend", self_id: job.selfId, user_id: job.userId,
+      ...(job.scope === "group" ? { group_id: job.peerId } : {}) };
+    const access = readAccessControl(), authorized = authorizeEvent(event, access);
+    if (!authorized) return null;
+    authorized.mentioned = true; authorized.recoveryJob = job;
+    authorized.messageContext = await resolveMessageContext({ event, groupId: job.scope === "group" ? job.peerId : null, selfId: job.selfId, sendAction: sendMessage });
+    for (const [sourceId, kind] of [[job.forwardSourceMessageId, "forward"], [job.imageSourceMessageId, "image"]]) {
+      if (!sourceId) continue;
+      const source = sourceId === job.sourceMessageId ? native : await sendMessage("get_msg", { message_id: sourceId });
+      const scopeMatches = job.scope === "group" ? String(source.group_id) === job.peerId : !source.group_id;
+      const sameUser = String(source.user_id ?? source.sender?.user_id) === job.userId;
+      const originalQuote = messageReferences(native.message).replyIds.includes(String(sourceId));
+      const ageAtRequest = job.sourceAt - Number(source.time)*1000;
+      if (!scopeMatches || (!sameUser && !originalQuote) || !Number.isFinite(ageAtRequest) || ageAtRequest < -30000 || ageAtRequest > (originalQuote ? 15 : 3)*60_000) continue;
+      if (kind === "forward" && hasForwardMessage(source.message)) authorized.recoveryForwardMessage = { message: source.message, messageId: sourceId };
+      if (kind === "image") authorized.imageReference = { images: imageSegments(source.message), messageId: sourceId };
+    }
+    if (!allowed()) return null;
+    return handleAuthorizedMessage(event, { sendMessage }, config, authorized, access);
+  });
 }
 
 async function main() {
@@ -934,10 +1030,13 @@ async function main() {
   });
   let managementServer;
   let modelProxy;
+  let replyRecovery;
   try {
     modelProxy = await startConfiguredModelProxy();
     if (controller.signal.aborted) return;
     await bridge.start();
+    replyRecovery = startReplyRecovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected,
+      run: (job, allowed) => runRecoveredRequest(job, allowed, bridge.sendMessage, config), pace: paceOneBotMessage });
     managementServer = await startManagementServer({
       getOneBotStatus: () => ({
         ...bridge.getStatus(),
@@ -972,6 +1071,8 @@ async function main() {
     queuePendingStickerDescriptions();
     await new Promise((resolve) => controller.signal.addEventListener("abort", resolve, { once: true }));
   } finally {
+    replyRecovery?.stop();
+    stopChatGptImageGeneration();
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     await bridge.close();

@@ -36,6 +36,7 @@ export const DEFAULT_LLM_SETTINGS = {
   searchCountry: "china",
   searchLanguage: "zh-cn",
   visionEnabled: true,
+  chatgptImageGenerationEnabled: false,
   characterRecognitionEnabled: true,
   videoUnderstandingEnabled: true,
   videoAsrEnabled: true,
@@ -115,6 +116,7 @@ export function normalizeLlmSettings(settings) {
   const searchCountry = typeof settings.searchCountry === "string" ? settings.searchCountry.trim().toLowerCase() : DEFAULT_LLM_SETTINGS.searchCountry;
   const searchLanguage = typeof settings.searchLanguage === "string" ? settings.searchLanguage.trim().toLowerCase() : DEFAULT_LLM_SETTINGS.searchLanguage;
   const visionEnabled = settings.visionEnabled === undefined ? DEFAULT_LLM_SETTINGS.visionEnabled : settings.visionEnabled;
+  const chatgptImageGenerationEnabled = settings.chatgptImageGenerationEnabled ?? DEFAULT_LLM_SETTINGS.chatgptImageGenerationEnabled;
   const characterRecognitionEnabled = settings.characterRecognitionEnabled ?? DEFAULT_LLM_SETTINGS.characterRecognitionEnabled;
   const videoUnderstandingEnabled = settings.videoUnderstandingEnabled ?? DEFAULT_LLM_SETTINGS.videoUnderstandingEnabled;
   const videoAsrEnabled = settings.videoAsrEnabled ?? DEFAULT_LLM_SETTINGS.videoAsrEnabled;
@@ -167,6 +169,7 @@ export function normalizeLlmSettings(settings) {
     throw new Error("搜索语言代码格式不正确，例如 zh-hans。");
   }
   if (typeof visionEnabled !== "boolean") throw new Error("图片识别开关必须是布尔值。");
+  if (typeof chatgptImageGenerationEnabled !== "boolean") throw new Error("ChatGPT 网页生图开关必须是布尔值。");
   if (typeof characterRecognitionEnabled !== "boolean") throw new Error("角色辨认开关必须是布尔值。");
   if ([videoUnderstandingEnabled, videoAsrEnabled, videoFramesEnabled].some((value) => typeof value !== "boolean")) throw new Error("视频理解开关必须是布尔值。");
   if (!Number.isInteger(videoMaxMinutes) || videoMaxMinutes < 1 || videoMaxMinutes > 30) throw new Error("视频媒体处理上限必须是 1 到 30 分钟。");
@@ -215,6 +218,7 @@ export function normalizeLlmSettings(settings) {
     searchCountry,
     searchLanguage,
     visionEnabled,
+    chatgptImageGenerationEnabled,
     characterRecognitionEnabled,
     videoUnderstandingEnabled,
     videoAsrEnabled,

@@ -411,6 +411,7 @@ async function getLlmReplyInternal({
   conversationContext = [],
   messageContext = null,
   forwardedMessages = null,
+  requestTime = Date.now(),
 }) {
   settings = settingsForGroup(settings, groupId);
   searchApiKey = settings.searchProvider === "serper" ? getSearchApiKey("serper") : searchApiKey ?? getSearchApiKey();
@@ -424,6 +425,7 @@ async function getLlmReplyInternal({
   if (summaryIntent) settings = { ...settings, maxTokens: Math.max(settings.maxTokens, 2800) };
   if (illustratedDiscussion) settings = { ...settings, maxTokens: Math.max(settings.maxTokens, 2800) };
   const now = Date.now();
+  const requestAt = Number.isFinite(requestTime) && requestTime > now-7*86400_000 && requestTime < now+30000 ? requestTime : now;
   if (!apiKey) {
     if (proactive) return { reply: null, status: "missing-key" };
     if (now - lastMissingKeyNoticeAt < missingKeyNoticeIntervalMs) return { reply: null, status: "missing-key-silent" };
@@ -456,8 +458,8 @@ async function getLlmReplyInternal({
       if (settings.contentSummaryEnabled === false) return { reply: "内容总结当前已关闭，请管理员在聊天设置中开启。", status: "summary-disabled" };
       if (summaryIntent.kind !== "text" && !settings.searchEnabled) return { reply: "请先开启联网搜索，才能查找和读取网页；直接贴文字仍可总结。", status: "search-disabled" };
       onSummaryStart();
-      try { summaryResult = await readSummarySource(summaryIntent, { apiKey: searchApiKey, settings }); }
-      catch (error) { return { reply: error instanceof SummaryReadError || error instanceof SearchRequestError ? error.message : "暂时没有读到原文，请稍后再试、换个公开链接，或直接贴出文字。", status: "summary-error" }; }
+      try { summaryResult = await readSummarySource(summaryIntent, { apiKey: searchApiKey, settings, now: requestAt }); }
+      catch (error) { return { reply: error instanceof SummaryReadError || error instanceof SearchRequestError ? error.message : "暂时没有读到原文，请稍后再试、换个公开链接，或直接贴出文字。", status: "summary-error", recoveryRetryable: error instanceof SearchRequestError && error.retryable === true, errorCode: error.code }; }
     }
     if (searchQuery !== null && !summaryResult && !settings.searchEnabled) {
       return { reply: "网页搜索当前未启用，请管理员在管理页开启后再试。", status: "search-disabled" };
@@ -499,13 +501,14 @@ async function getLlmReplyInternal({
     if (videoReference) {
       onVideoStart();
       try { videoResult = await readBilibiliVideo(videoReference, settings); }
-      catch (error) { return { reply: error.message, status: "video-error" }; }
+      catch (error) { return { reply: error.message, status: "video-error", recoveryRetryable: /暂时|超时|网络|连接|中断/u.test(error.message), errorCode: "VIDEO_READ_FAILED" }; }
       videoMaterialsRead = true;
       recordModelDiagnostic("tools", { code: "VIDEO_MATERIAL_READY", phase: "video" });
       imageDataUrls.push(...videoResult.frames.map((frame) => frame.dataUrl));
     }
 
     let searchResults = [];
+    let recoverableToolFailure = false;
     if (searchQuery !== null && !summaryResult) {
       try {
         const result = await searchWeb({
@@ -517,8 +520,8 @@ async function getLlmReplyInternal({
         });
         searchResults = result.results;
       } catch (error) {
-        if (error instanceof SearchRequestError) return { reply: error.message, status: "search-error" };
-        return { reply: "网页搜索暂时不可用，请稍后再试。", status: "search-error" };
+        if (error instanceof SearchRequestError) return { reply: error.message, status: "search-error", recoveryRetryable: error.retryable === true, errorCode: error.code };
+        return { reply: "网页搜索暂时不可用，请稍后再试。", status: "search-error", recoveryRetryable: true, errorCode: "SEARCH_ERROR" };
       }
       if (searchResults.length === 0) {
         return { reply: "这次没查到相关网页结果。可以换个更具体的关键词再试试。", status: "search-empty" };
@@ -544,6 +547,8 @@ async function getLlmReplyInternal({
       : messageText;
 
     const messages = [{ role: "system", content: settings.systemPrompt }];
+    const clockFormat = value => new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", dateStyle: "full", timeStyle: "short", hour12: false }).format(value);
+    messages.push({ role: "system", content: `可信时间：当前运行时间为${clockFormat(now)}；原请求时间为${clockFormat(requestAt)}（Asia/Shanghai）。今天、昨天、明年等相对日期按原请求时间解释；不能用训练资料年份或人设背景年份代替当前日历。检索时间、索引日期、文章发布日期和事件日期分别处理。` });
     messages.push({ role: "system", content: buildSenderMetadataInstruction(senderQQId) });
     const targetInstruction = conversationTargetInstruction(messageContext);
     if (targetInstruction) messages.push({ role: "system", content: targetInstruction });
@@ -661,7 +666,7 @@ async function getLlmReplyInternal({
                 recordModelDiagnostic("tools", { code: "VIDEO_MATERIAL_READY", phase: "video" });
                 toolContent = videoEvidenceText(video);
                 videoFrames.push(...video.frames);
-              } catch (error) { toolContent = error.message; }
+              } catch (error) { toolContent = error.message; if (/暂时|超时|网络|连接|中断/u.test(error.message)) recoverableToolFailure = true; }
             }
           }
           if (toolName === "select_sticker" && availableStickers.length) {
@@ -692,6 +697,7 @@ async function getLlmReplyInternal({
                   toolContent = JSON.stringify({ provider: result.provider, fallbackUsed: result.fallbackUsed, dateWarning: "搜索日期是服务估计的发布或更新时间，不是已核实的首次发布日期；需要读取原页核对。", results: result.results.map(({ title, url, content: excerpt, kind, publishedDate }) => ({ title, url, content: excerpt, kind, searchDateHint: publishedDate })) });
                   if (!result.results.length) toolContent = "没有找到相关网页结果。";
                 } catch (error) {
+                  if (error instanceof SearchRequestError && error.retryable) recoverableToolFailure = true;
                   toolContent = error instanceof SearchRequestError
                     ? error.message
                     : "网页搜索暂时不可用。";
@@ -750,7 +756,8 @@ async function getLlmReplyInternal({
         illustration: { adapter: "discussion", topic: "问题分析", format: "illustrated", body,
           articles: searchResults.map(({title,url})=>({title,url})), sourceText } };
     }
-    return { reply: reply ? appendSources(reply, searchResults) : null, stickerId: selectedStickerId, status: "ok", groupPersonaRevision: settings.groupPersonaRevision };
+    return { reply: reply ? appendSources(reply, searchResults) : null, stickerId: selectedStickerId, status: "ok", groupPersonaRevision: settings.groupPersonaRevision,
+      recoveryRetryable: recoverableToolFailure && !searchResults.length, errorCode: recoverableToolFailure ? "TOOL_TEMPORARY_FAILURE" : undefined };
   } catch (error) {
     if (videoMaterialsRead && error instanceof LlmRequestError) error.message = "视频素材已经读到，但生成回复时遇到问题：" + error.message;
     throw error;

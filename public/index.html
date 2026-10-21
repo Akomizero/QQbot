@@ -268,6 +268,12 @@
                 <label for="model-retry-enabled"><input id="model-retry-enabled" type="checkbox" checked>模型暂时连接失败时自动补试</label><p class="field-hint">普通回复的每个模型步骤最多请求2次（首次加1次补试），空回复也共用这次补试机会；短暂断连或繁忙通常等待4秒，限流最多等待15秒，总时限60秒。关闭后仅请求1次。工具后续步骤、角色辨认和后台学习是独立任务；同一条回复只发送一次。</p>
               </div>
               <div class="settings-field"><label>最近模型请求诊断</label><button type="button" id="refresh-model-diagnostics" class="button button-quiet">查看最近诊断</button><p class="field-hint">失败提示中的诊断号可对应下方记录。仅保存错误类别、次数和耗时，不保存聊天正文、密钥或接口地址。</p><pre id="model-diagnostics" class="diagnostic-output" role="status">点击查看，不会调用模型。</pre></div>
+              <div class="settings-field"><label>后台重试与自动补发</label><button type="button" id="refresh-reply-recovery" class="button button-quiet">查看补发状态</button><p class="field-hint">临时服务故障会登记原消息，后台最多处理3轮，约1分钟、3分钟、10分钟后补试；成功后引用原请求补发一次。重启后继续，权限撤销或人设/成员印象被清除后取消。重试过程不发进度消息，发送状态不确定时不盲目重复。</p><pre id="reply-recovery-status" class="diagnostic-output" role="status">点击查看，不会重试或发送消息。</pre></div>
+              <div class="settings-field settings-toggle">
+                <label for="chatgpt-image-generation-enabled"><input id="chatgpt-image-generation-enabled" type="checkbox">使用 ChatGPT 网页生成图片</label>
+                <p class="field-hint">例如“肥鱼，画一张橙发少女的肖像”或 @bot 后发送“/生图 描述”。可附带最多两张参考图。使用本机 Edge 中已登录的 ChatGPT，每次新建独立聊天，全局串行排队，完成后发回原会话；不使用 Codex 生图或 API 兜底。需要保持系统运行、Edge 打开和网页授权有效；实际额度以网页提示为准。保存后生效。</p>
+              </div>
+              <div class="settings-field"><label>网页生图连接与任务</label><button type="button" id="refresh-chatgpt-imagegen" class="button button-quiet">查看生图状态</button><pre id="chatgpt-imagegen-status" class="diagnostic-output" role="status">点击查看，不会生成图片或发送消息。</pre></div>
               <div class="settings-field settings-toggle">
                 <label for="long-reply-forward-enabled"><input id="long-reply-forward-enabled" type="checkbox" checked>长回复使用合并转发卡片</label>
                 <p class="field-hint">群聊和私聊的长回复折叠进一张卡片，点击展开阅读；保留完整文字和随附表情。短回复照常发送。保存后生效。</p>

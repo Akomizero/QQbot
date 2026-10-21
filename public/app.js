@@ -69,6 +69,7 @@ const llmFields = {
   searchLanguage: document.querySelector("#search-language"),
   searchEnabled: document.querySelector("#search-enabled"),
   visionEnabled: document.querySelector("#vision-enabled"),
+  chatgptImageGenerationEnabled: document.querySelector("#chatgpt-image-generation-enabled"),
   characterRecognitionEnabled: document.querySelector("#character-recognition-enabled"),
   videoUnderstandingEnabled: document.querySelector("#video-understanding-enabled"),
   videoAsrEnabled: document.querySelector("#video-asr-enabled"),
@@ -451,6 +452,7 @@ llmSettingsForm.addEventListener("submit", async (event) => {
     searchLanguage: llmFields.searchLanguage.value.trim(),
     searchEnabled: llmFields.searchEnabled.checked,
     visionEnabled: llmFields.visionEnabled.checked,
+    chatgptImageGenerationEnabled: llmFields.chatgptImageGenerationEnabled.checked,
     characterRecognitionEnabled: llmFields.characterRecognitionEnabled.checked,
     videoUnderstandingEnabled: llmFields.videoUnderstandingEnabled.checked,
     videoAsrEnabled: llmFields.videoAsrEnabled.checked,
@@ -528,6 +530,7 @@ function setLlmSettings(settings) {
   llmFields.searchLanguage.value = settings.searchLanguage;
   llmFields.searchEnabled.checked = settings.searchEnabled;
   llmFields.visionEnabled.checked = settings.visionEnabled;
+  llmFields.chatgptImageGenerationEnabled.checked = settings.chatgptImageGenerationEnabled === true;
   llmFields.characterRecognitionEnabled.checked = settings.characterRecognitionEnabled !== false;
   llmFields.videoUnderstandingEnabled.checked = settings.videoUnderstandingEnabled !== false;
   llmFields.videoAsrEnabled.checked = settings.videoAsrEnabled !== false;
@@ -1355,9 +1358,10 @@ function setupNavigation() {
     ["默认人设与私聊记忆", false, ["llm-personality", "llm-expression-style", "llm-memory", "llm-system-prompt"]],
     ["长回复发送", false, ["detailed-discussion-enabled", "long-reply-forward-enabled", "long-reply-threshold"]],
     ["联网阅读与总结", false, ["content-summary-enabled", "summary-output"]],
-    ["模型连接与回复参数", false, ["llm-model", "llm-api-endpoint", "llm-api-key", "clear-llm-api-key", "llm-temperature", "llm-max-tokens", "model-retry-enabled", "refresh-model-diagnostics"]],
+    ["模型连接与回复参数", false, ["llm-model", "llm-api-endpoint", "llm-api-key", "clear-llm-api-key", "llm-temperature", "llm-max-tokens", "model-retry-enabled", "refresh-model-diagnostics", "refresh-reply-recovery"]],
     ["联网搜索来源", false, ["search-provider", "serper-api-key", "clear-serper-api-key", "search-country", "search-language"]],
     ["图片与角色辨认", false, ["character-recognition-enabled"]],
+    ["ChatGPT 网页生图", false, ["chatgpt-image-generation-enabled", "refresh-chatgpt-imagegen"]],
     ["B站视频理解", false, ["video-asr-enabled", "video-frames-enabled", "video-max-minutes"]],
     ["主动聊天频率", false, ["proactive-pause-when-ignored", "proactive-cooldown-minutes", "proactive-frequency-minutes", "proactive-debounce-seconds", "proactive-daily-limit"]],
   ].map(([title, open, ids]) => {
@@ -1378,6 +1382,19 @@ document.querySelector("#refresh-model-diagnostics").addEventListener("click", a
     const labels = { start: "开始", http: "HTTP响应", transport: "连接失败", body: "正文传输", json: "数据解析", empty: "空回复", refusal: "模型拒绝", truncated: "长度截断", tools: "工具阶段", retry: "延迟补试", success: "返回答复", failure: "最终失败" };
     output.textContent = data.events.length ? data.events.slice(-20).map(item => `${new Date(item.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}  ${item.id}  ${labels[item.kind] ?? item.kind}${item.code ? " · " + item.code : ""}${item.status ? " · HTTP " + item.status : ""}${item.route ? " · " + ({ proxy: "代理", proxy_ipv4: "代理 IPv4", model_proxy: "模型专用代理", model_proxy_ipv4: "模型专用代理 IPv4", direct: "直连" }[item.route] ?? item.route) : ""}${item.connection ? " · 连接池#" + item.connection + (item.reused ? " 复用" : " 新建") : ""}${item.phase ? " · " + item.phase : ""}${item.attempt ? " · 第" + item.attempt + "次连接" : ""}${item.elapsedMs !== undefined ? " · " + item.elapsedMs + "ms" : ""}`).join("\n") : "尚无新版诊断记录，收到模型请求后会出现。查看此页不会调用模型。";
   } catch (error) { output.textContent = error.message; } finally { button.disabled = false; }
+});
+document.querySelector("#refresh-chatgpt-imagegen").addEventListener("click", async (event) => {
+  const button = event.currentTarget, output = document.querySelector("#chatgpt-imagegen-status"); button.disabled = true;
+  try { const { status } = await requestAdminApi("/api/chatgpt-imagegen");
+    output.textContent = `Skill ${status.installed ? "已安装" : "未安装"} · 浏览器 ${status.connected ? "已连接" : "未连接"}\n排队 ${status.pending} · ${status.running ? "正在生成" : "当前空闲"} · 已生成待发送 ${status.generated} · 已发出 ${status.delivered}\n失败 ${status.failed} · 需核对 ${status.uncertain}`;
+  } catch (error) { output.textContent = error.message; } finally { button.disabled = false; }
+});
+
+document.querySelector("#refresh-reply-recovery").addEventListener("click", async (event) => {
+  const button = event.currentTarget, output = document.querySelector("#reply-recovery-status"); button.disabled = true;
+  try { const { status } = await requestAdminApi("/api/reply-recovery"); output.textContent = `待补发 ${status.pending} · 重试中 ${status.running} · 已补发 ${status.delivered}（读回确认 ${status.verified}）\n状态待核对 ${status.uncertain} · 已到重试上限 ${status.exhausted} · 已取消 ${status.cancelled}`; }
+  catch (error) { output.textContent = error.message; }
+  finally { button.disabled = false; }
 });
 setupNavigation();
 await initializeAuth();

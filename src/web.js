@@ -21,6 +21,8 @@ import { addSticker, deleteSticker, listStickers, readSticker, updateSticker } f
 import { queueStickerDescription } from "./sticker-learning.js";
 import { getKnowledgeLearningStatus, flushKnowledgeLearning } from "./knowledge-learning.js";
 import { readModelDiagnostics } from "./model-diagnostics.js";
+import { readReplyRecoveryStatus } from "./reply-recovery.js";
+import { readChatGptImageStatus } from "./chatgpt-imagegen.js";
 import { readStickerPreferences, saveStickerPreferences } from "./sticker-preferences.js";
 import { readMemberImpressions, saveMemberImpression, forgetMemberImpression } from "./member-impressions.js";
 
@@ -530,6 +532,18 @@ export async function startManagementServer({
         if (request.method === "DELETE" && id && !url.pathname.endsWith("/image")) { deleteSticker(id); sendJson(response, 200, { deleted: true }); return; }
         sendJson(response, 405, { error: "此表情接口不支持该操作。" });
       } catch (error) { sendJson(response, error.statusCode ?? 400, { error: error.code ? "表情文件操作失败。" : error.message }); }
+      return;
+    }
+
+    if (url.pathname === "/api/chatgpt-imagegen" && request.method === "GET") {
+      try { sendJson(response, 200, { status: await readChatGptImageStatus() }); }
+      catch { sendJson(response, 500, { error: "读取网页生图状态失败。" }); }
+      return;
+    }
+
+    if (url.pathname === "/api/reply-recovery" && request.method === "GET") {
+      try { sendJson(response, 200, { status: readReplyRecoveryStatus() }); }
+      catch { sendJson(response, 500, { error: "读取后台补发状态失败。" }); }
       return;
     }
 

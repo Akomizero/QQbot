@@ -38,7 +38,7 @@ async function requestSerperInternal(apiKey, body) {
         const message = exhausted ? "Serper 账户额度不足，请管理员检查账户。"
           : [401, 403].includes(response.status) ? "Serper 拒绝了请求，请管理员检查密钥和账户额度。"
           : response.status === 429 ? "Serper 达到请求或额度限制，请稍后再试并检查账户额度。" : "Serper 搜索服务暂时出错，请稍后再试。";
-        throw new SearchRequestError(message, { code: `SERPER_HTTP_${response.status}` });
+        throw new SearchRequestError(message, { code: exhausted ? "SERPER_QUOTA" : `SERPER_HTTP_${response.status}` });
       }
       const payload = await readJsonLimited(response);
       recordModelDiagnostic("tools", { code: "SERPER_SUCCESS", phase: "serper_search", attempt, status: response.status, elapsedMs: Date.now()-started });
@@ -64,6 +64,7 @@ async function requestSerperInternal(apiKey, body) {
     }); } catch { break; }
   }
   if (attempts > 1 && finalError) finalError.message += `（已自动重试${attempts-1}次）`;
+  if (finalError) finalError.retryable = /^(?:SERPER_CONNECTION|SERPER_TIMEOUT|SERPER_HTTP_(?:408|429|500|502|503|504)|SEARCH_BODY_INTERRUPTED|SEARCH_EMPTY|SEARCH_INVALID_JSON)$/u.test(finalError.code);
   throw finalError ?? new SearchRequestError("Serper 搜索超时，请稍后再试。", { code: "SERPER_TIMEOUT" });
 }
 
