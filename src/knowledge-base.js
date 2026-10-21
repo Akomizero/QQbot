@@ -33,7 +33,8 @@ export function normalizeKnowledgeEntries(entries) {
     const evidenceRefs = (Array.isArray(entry.evidenceRefs) ? entry.evidenceRefs : []).filter(ref => /^[a-f\d]{64}$/u.test(ref?.hash ?? "") && Number.isFinite(ref.at)).slice(-20).map(({ hash, at }) => ({ hash, at }));
     const relatedStickerIds = [...new Set(Array.isArray(entry.relatedStickerIds) ? entry.relatedStickerIds : [])].filter(id => /^[a-f\d-]{36}$/u.test(id)).slice(0, 4);
     const supersedesId = typeof entry.supersedesId === "string" && /^[a-zA-Z0-9_-]{1,100}$/u.test(entry.supersedesId) ? entry.supersedesId : null;
-    return { id, title: title.trim(), tags: [...new Set(tags.map((tag) => tag.trim()))], content: content.trim(), enabled: reviewStatus === "learned" ? enabled : false, groupId, origin, learnedAt, updatedAt, evidenceCount, reviewStatus, reviewDecision, evidenceRefs, relatedStickerIds, supersedesId };
+    const requiresReview = entry.requiresReview === true;
+    return { id, title: title.trim(), tags: [...new Set(tags.map((tag) => tag.trim()))], content: content.trim(), enabled: reviewStatus === "learned" ? enabled : false, groupId, origin, learnedAt, updatedAt, evidenceCount, reviewStatus, reviewDecision, evidenceRefs, relatedStickerIds, supersedesId, requiresReview };
   });
   if (Buffer.byteLength(JSON.stringify(result), "utf8") > maxStoreBytes - 100) throw new Error("知识库总量超过 1 MB，请精简条目。");
   return result;
@@ -111,16 +112,17 @@ export function mergeLearnedKnowledge(groupId, candidates, now = Date.now()) {
       existing.evidenceRefs = [...oldRefs, ...fresh].slice(-20);
       existing.relatedStickerIds = [...new Set([...(existing.relatedStickerIds ?? []), ...(candidate.relatedStickerIds ?? [])])].slice(0, 4);
       existing.updatedAt = now;
-      if (existing.reviewStatus === "candidate" && candidate.confirmed && !existing.supersedesId && !existing.reviewDecision) {
+      existing.requiresReview = existing.requiresReview || candidate.requiresReview === true;
+      if (existing.reviewStatus === "candidate" && candidate.confirmed && !existing.requiresReview && !existing.supersedesId && !existing.reviewDecision) {
         existing.reviewStatus = "learned";
         existing.enabled = true;
       }
       existing.tags = [...new Set([...existing.tags, ...candidate.tags])].slice(0, 20);
     } else {
       if (entries.length >= 200 || entries.filter((entry) => entry.origin === "group" && entry.groupId === groupId).length >= 40) continue;
-      const confirmed = candidate.confirmed && !correction;
+      const confirmed = candidate.confirmed && !correction && !candidate.requiresReview;
       entries.push({ id, title: candidate.title, content: candidate.content, tags: candidate.tags, enabled: confirmed, groupId, origin: "group", learnedAt: now, updatedAt: now, evidenceCount: candidate.evidenceCount, reviewStatus: confirmed ? "learned" : "candidate",
-        reviewDecision: null, evidenceRefs: candidate.evidenceRefs ?? [], relatedStickerIds: candidate.relatedStickerIds ?? [], supersedesId: correction ? base.id : null });
+        reviewDecision: null, evidenceRefs: candidate.evidenceRefs ?? [], relatedStickerIds: candidate.relatedStickerIds ?? [], supersedesId: correction ? base.id : null, requiresReview: candidate.requiresReview === true });
     }
     changed += 1;
   }

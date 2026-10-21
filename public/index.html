@@ -404,24 +404,24 @@
         </section>
 
         <section class="settings-panel" id="page-visual" data-management-page="visual" role="tabpanel" aria-label="角色视觉记忆">
-          <div class="settings-heading"><div><p class="eyebrow">VISUAL MEMORY</p><h2>角色视觉记忆</h2><p>把角色纠正关联到具体图片。群友标注先待确认，确认后才用于识图；相似图片仍只作参考，不保证认出同角色的所有新图。</p></div><button type="button" class="button button-quiet" id="refresh-visual">刷新角色记忆</button></div>
+          <div class="settings-heading"><div><p class="eyebrow">VISUAL MEMORY</p><h2>角色视觉记忆</h2><p>群友纠正先待核实，再联网读正文、对照参考图。游戏资料先查维基百科，再补游戏Wiki与官方页面；姓名、作品和独特画面特征都有充分证据时自动采用，不必逐条确认。重复附和、搜索摘要或只搜到名字都不算核实；资料不足、冲突或搜索失败时保留候选。</p></div><button type="button" class="button button-quiet" id="refresh-visual">刷新角色记忆</button></div>
           <div class="settings-grid">
             <div class="settings-field"><label for="visual-group">选择角色记忆所属群</label><select id="visual-group"></select><p class="field-hint">群友纠正仅属于来源群。「通用管理员参考」会用于所有群，请明确区分。</p></div>
-            <div class="settings-field settings-toggle"><label for="visual-memory-learning-enabled"><input id="visual-memory-learning-enabled" type="checkbox">从群友角色纠正中生成待确认候选</label><p class="field-hint">可附一张图说「这个是鸣潮的达妮娅」，或引用图片纠正；也可在本人发图后3分钟内说明。已有库存表情可引用bot发出的表情纠正。多人多图不明确时不自动绑定。需开启识图和角色辨认。</p></div>
+            <div class="settings-field settings-toggle"><label for="visual-memory-learning-enabled"><input id="visual-memory-learning-enabled" type="checkbox">从角色纠正中学习，并联网核对后采用</label><p class="field-hint">可附一张图说「这个是鸣潮的达妮娅」，或引用图片纠正；也可在本人发图后3分钟内说明。已有库存表情可引用bot发出的表情纠正。多人多图不明确时不自动绑定。需开启识图、角色辨认与联网搜索；关闭搜索时只保留候选。</p></div>
           </div>
           <p class="field-hint" role="status" id="visual-status">正在读取…</p>
-          <div class="knowledge-filters"><input id="visual-filter" placeholder="搜索角色、作品或特征…" aria-label="筛选角色记忆"><select id="visual-filter-status" aria-label="角色记忆状态"><option value="all">全部状态</option><option value="candidate">待确认</option><option value="confirmed">已确认</option><option value="disabled">已停用</option><option value="rejected">已拒绝</option></select></div>
+          <div class="knowledge-filters"><input id="visual-filter" placeholder="搜索角色、作品或特征…" aria-label="筛选角色记忆"><select id="visual-filter-status" aria-label="角色记忆状态"><option value="all">全部状态</option><option value="candidate">待核实</option><option value="confirmed">已启用参考</option><option value="disabled">已停用</option><option value="rejected">已拒绝</option></select></div>
           <div class="knowledge-grid"><div id="visual-list" class="command-list"></div>
             <form id="visual-form" class="knowledge-editor" hidden>
               <h3>编辑角色标注</h3><p class="field-hint">只确认虚构角色；编辑不会改变对应的图片或来源群。</p>
               <div class="settings-field"><label for="visual-name">角色名</label><input id="visual-name" maxlength="60" required></div>
               <div class="settings-field"><label for="visual-work">作品名</label><input id="visual-work" maxlength="80" placeholder="确认启用时必填"></div>
               <div class="settings-field"><label for="visual-traits">可见特征，每行一条</label><textarea id="visual-traits" rows="5" required placeholder="填写2至8条服装、发饰等特征"></textarea></div>
-              <div class="settings-field"><label for="visual-entry-status">使用状态</label><select id="visual-entry-status"><option value="candidate">待确认，不用于识图</option><option value="confirmed">确认并启用</option><option value="disabled">停用</option><option value="rejected">拒绝此标注</option></select></div>
+              <div class="settings-field"><label for="visual-entry-status">使用状态</label><select id="visual-entry-status"><option value="candidate">待核实，不用于识图</option><option value="confirmed">确认并启用</option><option value="disabled">停用</option><option value="rejected">拒绝此标注</option></select></div>
               <div class="form-actions"><button class="button button-primary" type="submit">保存角色记忆</button><button class="button button-quiet" id="cancel-visual" type="button">取消</button></div>
             </form>
           </div>
-          <p class="field-hint">只保存通过内容检查的低清预览、图像指纹、角色标注与来源指纹，不保存完整原图或聊天记录。未确认的纠正不会覆盖已确认标注；不识别真人身份。</p>
+          <p class="field-hint">只保存通过内容检查的低清预览、图像指纹、角色标注与核对来源，不保存完整原图或聊天记录。待核实纠正不会覆盖已有标注，联网核对也不会自动覆盖与旧标注冲突的同图身份；不识别真人身份。自动核对不是绝对正确，仍可随时停用或拒绝。</p>
         </section>
 
         <section class="settings-panel" id="page-knowledge" data-management-page="knowledge" role="tabpanel" aria-label="本地知识库">

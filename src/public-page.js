@@ -68,7 +68,7 @@ function pageAgent(url, record, signal) {
   return agent;
 }
 
-async function requestPage(url, record) {
+async function requestPage(url, record, image = false) {
   const signal = AbortSignal.timeout(15000);
   const agent = pageAgent(url, record, signal);
   return new Promise((resolve, reject) => {
@@ -77,7 +77,7 @@ async function requestPage(url, record) {
       lookup: (_host, options, callback) => {
         if (typeof options === "function") { callback = options; options = {}; }
         if (options?.all) callback(null, [record]); else callback(null, record.address, record.family);
-      }, headers: { host: url.hostname, "user-agent": "Mozilla/5.0 (compatible; QQBotSummary/1.0)", accept: "text/html,application/xhtml+xml,text/plain;q=0.9", "accept-encoding": "identity" } }, (response) => {
+      }, headers: { host: url.hostname, "user-agent": "Mozilla/5.0 (compatible; QQBotSummary/1.0)", accept: image ? "image/jpeg,image/png,image/webp" : "text/html,application/xhtml+xml,text/plain;q=0.9", "accept-encoding": "identity" } }, (response) => {
       const status = response.statusCode ?? 0;
       if ([301,302,303,307,308].includes(status)) {
         const location = response.headers.location;
@@ -86,7 +86,8 @@ async function requestPage(url, record) {
         return;
       }
       const contentType = String(response.headers["content-type"] ?? "");
-      if (status < 200 || status >= 300 || !/^(?:text\/|application\/(?:xhtml\+xml|json))/iu.test(contentType) || Number(response.headers["content-length"]) > limit) {
+      const acceptedType = image ? /^image\/(?:jpeg|png|webp)(?:;|$)/iu.test(contentType) : /^(?:text\/|application\/(?:xhtml\+xml|json))/iu.test(contentType);
+      if (status < 200 || status >= 300 || !acceptedType || Number(response.headers["content-length"]) > limit) {
         response.destroy(); agent.destroy(); reject(new Error("网页需要登录、限制访问或不是可读文字页面。")); return;
       }
       const chunks = []; let size = 0;
@@ -100,6 +101,7 @@ async function requestPage(url, record) {
           if (encoding === "gzip") bytes = gunzipSync(bytes, {maxOutputLength:limit});
           else if (encoding === "deflate") bytes = inflateSync(bytes, {maxOutputLength:limit});
           else if (encoding === "br") bytes = brotliDecompressSync(bytes, {maxOutputLength:limit});
+          if (image) { resolve({ bytes, url: url.href, contentType }); return; }
           const charset = contentType.match(/charset\s*=\s*["']?([^;\s"']+)/iu)?.[1]
             ?? bytes.subarray(0,4096).toString("ascii").match(/charset\s*=\s*["']?([a-z0-9_-]+)/iu)?.[1] ?? "utf-8";
           let text; try { text = new TextDecoder(charset).decode(bytes); } catch { text = bytes.toString("utf8"); }
@@ -131,4 +133,17 @@ export async function readPublicPage(value) {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
+}
+
+// Static reference art only; reuse public DNS pinning, TLS, body limits and redirect checks.
+export async function readPublicReferenceImage(value, allowedHost) {
+  let next = value;
+  for (let hop = 0; hop <= 3; hop++) {
+    const { url, record } = await publicPageAddress(next);
+    if (!allowedHost(url.hostname)) throw new Error("参考图片来源未受信任。");
+    const response = await requestPage(url, record, true);
+    if (!response.redirect) return response;
+    next = new URL(response.redirect, url).href;
+  }
+  throw new Error("参考图片跳转过多。");
 }

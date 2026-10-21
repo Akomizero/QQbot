@@ -942,7 +942,8 @@ function knowledgeSourceLabel(entry) {
   return `${entry.reviewStatus === "candidate" ? "待确认" : entry.reviewStatus === "rejected" ? "已拒绝" : "群聊积累"} · 群 ${entry.groupId} · ${entry.evidenceCount ?? 0} 条支持 · ${date}`
     + (entry.evidenceRefs?.length ? ` · 已保存${entry.evidenceRefs.length}条来源指纹（不含原文）` : "")
     + (entry.relatedStickerIds?.length ? ` · 关联表情：${entry.relatedStickerIds.map(id => id.slice(0, 8)).join("、")}` : " · 未关联具体表情")
-    + (entry.supersedesId ? " · 对已有知识的修正，需确认" : "");
+    + (entry.supersedesId ? " · 对已有知识的修正，需确认" : "")
+    + (entry.requiresReview && !entry.reviewDecision ? " · 角色或事实类候选，不因多人复述自动启用" : "");
 }
 
 function openKnowledgeEditor(entry = null) {
@@ -1340,7 +1341,7 @@ document.querySelector("#extract-member-impressions").addEventListener("click", 
 let visualData = { entries: [], revision: null }, visualScope;
 let visualDraft = null, visualSequence = 0;
 const visualForm = document.querySelector("#visual-form"), visualGroupSelect = document.querySelector("#visual-group");
-const visualStatusLabels = { candidate: "待确认", confirmed: "已确认并启用", disabled: "已停用", rejected: "已拒绝" };
+const visualStatusLabels = { candidate: "待核实", confirmed: "已启用参考", disabled: "已停用", rejected: "已拒绝" };
 function openVisualEditor(entry) {
   visualDraft = entry;
   document.querySelector("#visual-name").value = entry.name;
@@ -1372,9 +1373,20 @@ function renderVisualMemories() {
       const image = document.createElement("img"); image.src = entry.preview; image.alt = "对应图片的低清预览"; image.width = 160; image.loading = "lazy"; card.append(image);
     }
     const title = document.createElement("h3"); title.textContent = `${entry.name} · ${entry.work || "作品待补充"}`;
-    const info = document.createElement("p"); info.className = "field-hint"; info.textContent = `${visualStatusLabels[entry.status] ?? entry.status} · ${entry.groupId ? "仅本群" : "通用管理员参考"} · ${entry.evidenceRefs?.length ?? 0}条来源${entry.relatedStickerId ? " · 已关联库存表情" : ""}${entry.preview ? "" : " · 旧参考未保存预览"}`;
+    const info = document.createElement("p"); info.className = "field-hint"; info.textContent = `${visualStatusLabels[entry.status] ?? entry.status} · ${entry.origin === "web-verified" ? "联网核对后自动采用" : entry.status === "confirmed" ? "管理员标注（非官方核验）" : "群友提供的待核实说法"} · ${entry.groupId ? "仅本群" : "通用管理员参考"} · ${entry.evidenceRefs?.length ?? 0}条来源${entry.relatedStickerId ? " · 已关联库存表情" : ""}${entry.preview ? "" : " · 旧参考未保存预览"}`;
     const traits = document.createElement("p"); traits.textContent = entry.traits.join("；");
     card.append(title, info, traits);
+    if (entry.verification) {
+      const checks = { verified: "正文与参考画面核对通过", conflict: "资料或画面存在冲突", "existing-reference-conflict": "核对结果与已有同图标注冲突，未自动覆盖", "insufficient-sources": "可靠正文来源不足", "no-reference-image": "未取得可靠页面中的角色参考图", "insufficient-evidence": "姓名、作品或视觉证据不足", "search-disabled": "联网搜索已关闭", "search-unavailable": "搜索暂时不可用", "verification-unavailable": "核对未完成", cancelled: "核对已取消" };
+      const details = document.createElement("details"), summary = document.createElement("summary");
+      summary.textContent = "联网核对：" + (checks[entry.verification.status] ?? "待核实"); details.append(summary);
+      for (const source of (entry.verification.sources ?? [])) {
+        let url; try { url = new URL(source.url); if (url.protocol !== "https:" || url.username || url.password) continue; } catch { continue; }
+        const row = document.createElement("p"), link = document.createElement("a"); link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = source.title || url.hostname; row.append(link);
+        if (source.quote) row.append(document.createTextNode(" · 正文证据：" + source.quote)); details.append(row);
+      }
+      const time = document.createElement("p"); time.className = "field-hint"; time.textContent = "核对时间：" + new Date(entry.verification.checkedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }); details.append(time); card.append(details);
+    }
     if (entry.evidenceRefs?.length) {
       const details = document.createElement("details"), label = document.createElement("summary"), refs = document.createElement("p");
       label.textContent = "来源时间与指纹"; refs.className = "field-hint";
@@ -1404,8 +1416,8 @@ async function loadVisualMemories() {
     visualScope = data.groupId; visualData = data;
     visualGroupSelect.replaceChildren(...[...data.groups.map(id => ({ value: id, text: `群 ${id}` })), { value: "global", text: "通用管理员参考（所有群）" }].map(item => { const option = document.createElement("option"); option.value = item.value; option.textContent = item.text; return option; }));
     visualGroupSelect.value = visualScope ?? "global";
-    const learning = { waiting: "等待新的角色纠正", queued: "纠正处理已排队", extracting: "正在提取角色标注", "candidate-saved": "已保存待确认候选", duplicate: "已有相同标注，未重复添加", "no-correction": "没有可保存的明确角色纠正", "ambiguous-image": "图片不唯一，未自动绑定，请单独发图纠正", "unavailable-or-rejected": "本次内容检查或提炼未完成，未保存图片；可重新明确纠正" };
-    document.querySelector("#visual-status").textContent = `共${data.entries.length}条 · 待确认${data.entries.filter(entry => entry.status === "candidate").length}条 · 已启用${data.entries.filter(entry => entry.status === "confirmed").length}条 · ${learning[data.learning?.code] ?? "等待纠正"}${data.learningEnabled ? "" : " · 自动学习已关闭"}`;
+    const learning = { waiting: "等待新的角色纠正", queued: "纠正处理已排队", extracting: "正在提取角色标注", verifying: "正在查维基百科、读取资料并核对画面", "web-verified": "证据核对通过，已自动采用", "candidate-saved": "已保留待核实候选，可查看不足或冲突原因", duplicate: "已有相同标注，未重复添加", "no-correction": "没有可保存的明确角色纠正", "ambiguous-image": "图片不唯一，未自动绑定，请单独发图纠正", "unavailable-or-rejected": "本次内容检查或提炼未完成，未保存图片；可重新明确纠正" };
+    document.querySelector("#visual-status").textContent = `共${data.entries.length}条 · 待核实${data.entries.filter(entry => entry.status === "candidate").length}条 · 已启用${data.entries.filter(entry => entry.status === "confirmed").length}条 · ${learning[data.learning?.code] ?? "等待纠正"}${data.learningEnabled ? "" : " · 自动学习已关闭"}`;
     renderVisualMemories();
   } catch (error) { document.querySelector("#visual-status").textContent = error.message; }
 }
@@ -1425,7 +1437,7 @@ setInterval(() => { if (!managementContent.hidden && !document.querySelector("#p
 
 function setupNavigation() {
   const descriptions = { members: "从与AI的日常对话中逐步了解每位成员，显示初步观察、已形成印象及自动维护。", chat: "管理通用功能、模型连接和默认人设；各群角色在分群人设中单独配置。", personas: "选择一个群，分别设置个性、表达风格、昵称呼唤词和长期记忆。", knowledge: "积累群内网梗和互动背景，查看、确认或编辑学到的知识。", stickers: "放入常用表情，给它们标上情绪和适用场景。", access: "查看连接状态，设置哪些群和好友可以与 bot 互动。", commands: "管理固定指令，常用回复一键配置。" };
-  descriptions.visual = "管理群友纠正形成的角色视觉记忆，确认后用于所在群的后续识图。";
+  descriptions.visual = "管理角色纠正与核对来源；联网核对通过或管理员启用后，用于所在群的后续识图。";
   const buttons = [...document.querySelectorAll(".management-nav [data-page]")];
   function showPage(page) {
     if (!Object.hasOwn(descriptions, page)) page = "chat";

@@ -6,7 +6,8 @@ import { getLlmApiKey } from "./config.js";
 import { settingsForGroup } from "./group-personas.js";
 import { fetchModel } from "./model-transport.js";
 import { characterFingerprint } from "./character-vision.js";
-import { addVisualCandidate, isVisualCorrectionText } from "./visual-memory-store.js";
+import { addVisualCandidate, isVisualCorrectionText, recordVisualVerification } from "./visual-memory-store.js";
+import { verifyVisualCorrection } from "./visual-verification.js";
 import { reviewStickerBytes } from "./sticker-review.js";
 const seen = new Map(), states = new Map();
 let tail = Promise.resolve(), waiting = 0;
@@ -55,6 +56,14 @@ export function queueVisualCorrection({ groupId, text, messageId, sourceMessageI
     if (!allowed()) return;
     const added = addVisualCandidate({ groupId, name, work, traits, fingerprint, preview: `data:image/jpeg;base64,${previewBytes.toString("base64")}`,
       relatedStickerId, evidence: { hash: key, imageSourceHash: createHash("sha256").update(`${groupId}:${sourceMessageId ?? messageId}`).digest("hex"), at: Date.now() } });
-    states.set(groupId, { code: added ? "candidate-saved" : "duplicate", at: Date.now() });
+    states.set(groupId, { code: added ? "verifying" : "duplicate", at: Date.now() });
+    if (added && allowed()) {
+      let report;
+      try { report = await verifyVisualCorrection({ name, work, dataUrl, allowed }); }
+      catch { report = { status: "verification-unavailable", sources: [] }; }
+      if (!allowed()) return;
+      const adopted = recordVisualVerification(groupId, added, report);
+      states.set(groupId, { code: adopted ? "web-verified" : "candidate-saved", at: Date.now() });
+    }
   }).catch(() => { states.set(groupId, { code: "unavailable-or-rejected", at: Date.now() }); }).finally(() => { waiting--; });
 }

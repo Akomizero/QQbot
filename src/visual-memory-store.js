@@ -37,7 +37,7 @@ export function confirmedVisualReferences(groupId) {
   const all = readStore(), scoped = all.filter(item => item.status === "confirmed" && item.groupId === groupId);
   return all.filter(item => item.status === "confirmed" && (item.groupId === groupId || item.groupId === null
     && !scoped.some(local => local.fingerprint?.sha256 === item.fingerprint?.sha256)))
-    .map(item => ({ ...item, origin: "administrator-confirmed" }));
+    .map(item => ({ ...item, origin: item.origin === "web-verified" ? "web-verified" : "administrator-confirmed" }));
 }
 export function visualMemoryRevision(groupId) { return revisionOf(scopeEntries(readStore(), groupId)); }
 function checkRevision(all, groupId, revision) {
@@ -52,7 +52,9 @@ export function editVisualMemory(groupId, input, revision, remove = false) {
     const name = clean(input.name, 60), work = clean(input.work, 80), traits = Array.isArray(input.traits) ? input.traits.map(x => clean(x, 120)).filter(Boolean) : [];
     if (!name || !safe(name + work + traits.join(" ")) || traits.length < 2 || traits.length > 8 || !["candidate", "confirmed", "disabled", "rejected"].includes(input.status)
       || input.status === "confirmed" && !work) throw new Error("请填写角色名、2至8条可见特征；确认启用时还需填写作品名。");
+    const identityChanged = item.name !== name || item.work !== work || JSON.stringify(item.traits) !== JSON.stringify(traits);
     Object.assign(item, { name, work, traits, status: input.status, updatedAt: new Date().toISOString(), reviewedByAdministrator: true });
+    if (identityChanged) { item.origin = "administrator"; delete item.verification; }
     if (item.status === "confirmed") for (const other of all) {
       if (other !== item && (other.groupId ?? null) === groupId && other.status === "confirmed" && other.fingerprint?.sha256 === item.fingerprint?.sha256)
         Object.assign(other, { status: "disabled", updatedAt: item.updatedAt, reviewedByAdministrator: true });
@@ -64,7 +66,7 @@ export function editVisualMemory(groupId, input, revision, remove = false) {
 export function addVisualCandidate(input) {
   const all = readStore();
   if (!/^\d{1,32}$/u.test(input.groupId) || !input.name || !safe(input.name + input.work + input.traits.join(" "))) throw new Error("角色纠正不适合保存。");
-  const existing = all.find(item => item.groupId === input.groupId && item.fingerprint?.sha256 === input.fingerprint.sha256 && item.name === input.name && item.work === input.work);
+  const existing = all.find(item => item.groupId === input.groupId && item.fingerprint?.sha256 === input.fingerprint.sha256 && item.name === input.name && (!input.work || item.work === input.work));
   if (existing) {
     if (existing.status === "rejected" || existing.reviewedByAdministrator) return false;
     const refs = existing.evidenceRefs ?? [];
@@ -76,7 +78,19 @@ export function addVisualCandidate(input) {
       relatedStickerId: input.relatedStickerId ?? null, evidenceRefs: [input.evidence],
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   }
-  writeStore(all); return true;
+  writeStore(all); return existing?.id ?? all.at(-1).id;
+}
+export function recordVisualVerification(groupId, id, report) {
+  const all = readStore(), item = all.find(item => item.groupId === groupId && item.id === id);
+  if (!item || item.status !== "candidate" || item.reviewedByAdministrator) return false;
+  item.verification = { ...report, checkedAt: new Date().toISOString() };
+  const conflict = all.some(other => other !== item && (other.groupId === groupId || other.groupId === null) && other.status === "confirmed"
+    && other.fingerprint?.sha256 === item.fingerprint?.sha256 && (other.name !== item.name || other.work !== (report.work || item.work)));
+  if (report.status === "verified" && !conflict && report.work && safe(report.work)) {
+    item.status = "confirmed"; item.origin = "web-verified"; item.work = report.work; item.traits = report.features;
+  } else if (conflict && report.status === "verified") item.verification.status = "existing-reference-conflict";
+  item.updatedAt = new Date().toISOString(); writeStore(all);
+  return item.origin === "web-verified" && item.status === "confirmed";
 }
 export function saveAdministratorVisualReference(entry) {
   const all = readStore();
