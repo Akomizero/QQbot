@@ -299,6 +299,10 @@
                 <p class="field-hint">最近对话中，群友追问、回答或引用 bot 时，即使不 @ 也会结合上下文判断是否回复；不确定对象时保持安静。仅授权群，最多参考近15分钟20条文字，保存在内存；实际回复至少间隔10秒。</p>
               </div>
               <div class="settings-field settings-toggle">
+                <label for="forward-reading-enabled"><input id="forward-reading-enabled" type="checkbox" checked>读取QQ合并转发消息</label>
+                <p class="field-hint">@bot并附转发、引用转发提问，或先发转发再于3分钟内说“看看刚才的聊天记录”。读取最多40条节点、2层嵌套和2张图片，也可说“看这条转发第3张”。长记录会说明截取范围。转发中的语音、视频和文件仅作未读取标记；正文不自动写进知识库、成员印象或表情库。所有授权群与白名单好友适用。</p>
+              </div>
+              <div class="settings-field settings-toggle">
                 <label for="video-understanding-enabled"><input id="video-understanding-enabled" type="checkbox">启用B站视频理解与观后感</label>
                 <p class="field-hint">发「肥鱼 看看这个视频 BV号，说说观后感」或B站视频链接。读取实际字幕、语音和关键画面，默认只说几句感受；不会凭标题假装看完。公开匿名访问，部分视频受平台或登录限制。</p>
               </div>

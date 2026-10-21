@@ -44,6 +44,7 @@ const llmFields = {
   stickerLearningEnabled: document.querySelector("#sticker-learning-enabled"),
   nicknameTriggerEnabled: document.querySelector("#nickname-trigger-enabled"),
   conversationFollowupEnabled: document.querySelector("#conversation-followup-enabled"),
+  forwardReadingEnabled: document.querySelector("#forward-reading-enabled"),
   botAliases: document.querySelector("#bot-aliases"),
   proactivePauseWhenIgnored: document.querySelector("#proactive-pause-when-ignored"),
   temperature: document.querySelector("#llm-temperature"),
@@ -425,6 +426,7 @@ llmSettingsForm.addEventListener("submit", async (event) => {
     stickerLearningEnabled: llmFields.stickerLearningEnabled.checked,
     nicknameTriggerEnabled: llmFields.nicknameTriggerEnabled.checked,
     conversationFollowupEnabled: llmFields.conversationFollowupEnabled.checked,
+    forwardReadingEnabled: llmFields.forwardReadingEnabled.checked,
     botAliases: llmFields.botAliases.value.split(/[,，、\n]+/u).map((name) => name.trim()).filter(Boolean),
     proactivePauseWhenIgnored: llmFields.proactivePauseWhenIgnored.checked,
     temperature: Number(llmFields.temperature.value),
@@ -496,6 +498,7 @@ function setLlmSettings(settings) {
   llmFields.stickerLearningEnabled.checked = settings.stickerLearningEnabled !== false;
   llmFields.nicknameTriggerEnabled.checked = settings.nicknameTriggerEnabled !== false;
   llmFields.conversationFollowupEnabled.checked = settings.conversationFollowupEnabled !== false;
+  llmFields.forwardReadingEnabled.checked = settings.forwardReadingEnabled !== false;
   llmFields.botAliases.value = (settings.botAliases ?? ["大肥鱼", "肥鱼", "鱼鱼"]).join("、");
   llmFields.proactivePauseWhenIgnored.checked = settings.proactivePauseWhenIgnored !== false;
   llmFields.temperature.value = settings.temperature;
@@ -1336,7 +1339,7 @@ function setupNavigation() {
   document.querySelector("#knowledge-switches").prepend(llmFields.knowledgeEnabled.closest(".settings-field"));
   const grid = llmSettingsForm.querySelector(".settings-grid");
   const groups = [
-    ["常用功能", true, ["nickname-trigger-enabled", "bot-aliases", "conversation-followup-enabled", "search-enabled", "vision-enabled", "video-understanding-enabled", "proactive-chat-enabled"]],
+    ["常用功能", true, ["nickname-trigger-enabled", "bot-aliases", "conversation-followup-enabled", "forward-reading-enabled", "search-enabled", "vision-enabled", "video-understanding-enabled", "proactive-chat-enabled"]],
     ["默认人设与私聊记忆", false, ["llm-personality", "llm-expression-style", "llm-memory", "llm-system-prompt"]],
     ["长回复发送", false, ["detailed-discussion-enabled", "long-reply-forward-enabled", "long-reply-threshold"]],
     ["联网阅读与总结", false, ["content-summary-enabled", "summary-output"]],

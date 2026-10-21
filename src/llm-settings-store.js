@@ -20,6 +20,7 @@ export const DEFAULT_LLM_SETTINGS = {
   stickerLearningEnabled: true,
   nicknameTriggerEnabled: true,
   conversationFollowupEnabled: true,
+  forwardReadingEnabled: true,
   botAliases: ["大肥鱼", "肥鱼", "鱼鱼"],
   proactivePauseWhenIgnored: true,
   temperature: 0.7,
@@ -99,6 +100,7 @@ export function normalizeLlmSettings(settings) {
   const stickerLearningEnabled = settings.stickerLearningEnabled === undefined ? DEFAULT_LLM_SETTINGS.stickerLearningEnabled : settings.stickerLearningEnabled;
   const nicknameTriggerEnabled = settings.nicknameTriggerEnabled ?? DEFAULT_LLM_SETTINGS.nicknameTriggerEnabled;
   const conversationFollowupEnabled = settings.conversationFollowupEnabled ?? DEFAULT_LLM_SETTINGS.conversationFollowupEnabled;
+  const forwardReadingEnabled = settings.forwardReadingEnabled ?? DEFAULT_LLM_SETTINGS.forwardReadingEnabled;
   const botAliases = settings.botAliases ?? DEFAULT_LLM_SETTINGS.botAliases;
   const proactivePauseWhenIgnored = settings.proactivePauseWhenIgnored ?? DEFAULT_LLM_SETTINGS.proactivePauseWhenIgnored;
   const maxTokens = Number(settings.maxTokens);
@@ -144,6 +146,7 @@ export function normalizeLlmSettings(settings) {
   if (typeof knowledgeLearningEnabled !== "boolean" || typeof stickersEnabled !== "boolean" || typeof stickerLearningEnabled !== "boolean") throw new Error("群聊积累和表情包开关必须是布尔值。");
   if (typeof nicknameTriggerEnabled !== "boolean" || typeof proactivePauseWhenIgnored !== "boolean") throw new Error("昵称呼唤和无人回应开关必须是布尔值。");
   if (typeof conversationFollowupEnabled !== "boolean") throw new Error("对话衔接开关必须是布尔值。");
+  if (typeof forwardReadingEnabled !== "boolean") throw new Error("转发阅读开关必须是布尔值。");
   if (!Array.isArray(botAliases) || botAliases.length > 10 || botAliases.some((name) => typeof name !== "string" || name.trim().length < 2 || name.length > 20 || /[\r\n\[\]<>]/u.test(name))) throw new Error("昵称最多 10 个，每个 2 到 20 字。");
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
     throw new Error("temperature 必须是 0 到 2 之间的数字。");
@@ -196,6 +199,7 @@ export function normalizeLlmSettings(settings) {
     stickerLearningEnabled,
     nicknameTriggerEnabled,
     conversationFollowupEnabled,
+    forwardReadingEnabled,
     botAliases: [...new Set(botAliases.map((name) => name.trim()))],
     proactivePauseWhenIgnored,
     temperature,

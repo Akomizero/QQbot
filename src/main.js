@@ -34,6 +34,7 @@ import { clearMemberLearningBuffer } from "./knowledge-learning.js";
 import { startConfiguredModelProxy } from "./local-model-proxy.js";
 import { closeModelConnections } from "./model-transport.js";
 import { rememberGroupImages, resolveRecentGroupImages, clearRecentGroupImages, canUseRecentGroupImages } from "./recent-group-images.js";
+import { hasForwardMessage, rememberForwardMessage, resolveForwardSource, readForwardedMessages, clearForwardContext, ForwardReadError } from "./forward-input.js";
 
 const sensitiveValues = new Set();
 const seenMessageIds = new Map();
@@ -490,6 +491,7 @@ async function handleMessage(event, { sendMessage }, config) {
       personaSince = settings.groupPersonaSince;
       followupEnabled = settings.conversationFollowupEnabled;
       visionEnabled = settings.visionEnabled;
+      if (settings.forwardReadingEnabled !== false) rememberForwardMessage({ event, ...authorized });
       if (visionEnabled) rememberGroupImages({ event, groupId: authorized.groupId, selfId: authorized.selfId, since: personaSince });
       if (settings.nicknameTriggerEnabled && settings.botAliases.some((name) => {
         const text = authorized.content.toLocaleLowerCase("zh-CN"), alias = name.toLocaleLowerCase("zh-CN");
@@ -510,11 +512,12 @@ async function handleMessage(event, { sendMessage }, config) {
     try { acknowledgeGroupReply({ groupId: authorized.groupId, mentioned: authorized.mentioned, text: authorized.content, replyIds: segmentsOf(event.message).filter((segment) => segment?.type === "reply").map((segment) => String(segment.data?.id ?? "")) }); } catch {}
     if (followupEnabled && !authorized.mentioned && isPossibleBotFollowup({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content,
       replyIds: messageReferences(event.message).replyIds, mentionsOther: hasAnyMention(event.message),
-      hasImage: visionEnabled && Array.isArray(event.message) && event.message.some(segment => segment?.type === "image") })) {
+      hasImage: visionEnabled && Array.isArray(event.message) && event.message.some(segment => segment?.type === "image"),
+      hasForward: readLlmSettings().forwardReadingEnabled !== false && hasForwardMessage(event.message) })) {
       authorized.mentioned = true;
       authorized.followup = true;
     }
-    if (visionEnabled && authorized.mentioned && Array.isArray(event.message) && !event.message.some(segment => segment?.type === "image")) {
+    if (visionEnabled && authorized.mentioned && Array.isArray(event.message) && !hasForwardMessage(event.message) && !event.message.some(segment => segment?.type === "image")) {
       authorized.imageReference = await resolveRecentGroupImages({ event, groupId: authorized.groupId, selfId: authorized.selfId,
         text: authorized.content, since: personaSince, sendAction: sendMessage });
       if (authorized.imageReference) authorized.messageContext.imageSource = {
@@ -531,6 +534,7 @@ async function handleMessage(event, { sendMessage }, config) {
       if (context) context.updatedAt = Date.now();
     }
   }
+  if (authorized.scope === "private" && readLlmSettings().forwardReadingEnabled !== false) rememberForwardMessage({ event, ...authorized, selfId: numericId(event.self_id) });
   const pacedSend = (action, params, extraGuard = () => true) => {
     const allowed = () => {
       const latest = readAccessControl();
@@ -551,6 +555,7 @@ async function handleMessage(event, { sendMessage }, config) {
         clearMemberLearningBuffer(authorized.groupId, authorized.userId);
         clearGroupConversations(authorized.groupId);
         clearRecentGroupImages(authorized.groupId);
+        clearForwardContext(authorized.groupId);
         cancelPendingGroupTurn(authorized.groupId);
         passiveGroupContexts.delete(authorized.groupId);
         authorized.memberMemoryAction = memoryCommand;
@@ -603,8 +608,8 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
 
   const searchIntent = parseSearchIntent(authorized.content);
   const summaryIntent = parseSummaryIntent(authorized.content);
-  const images = authorized.imageReference?.images ?? imageSegments(event.message);
-  const imageRequested = images === null || images.length > 0;
+  let images = authorized.imageReference?.images ?? imageSegments(event.message);
+  let imageRequested = images === null || images.length > 0;
   if (authorized.scope === "group" && command.kind === "none"
     && segmentsOf(event.message).every((segment) => ["text", "at", "image", "reply"].includes(segment?.type))) {
     try { observeKnowledgeMessage({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content.replaceAll("[QQ表情]", "").trim(), settings: readLlmSettings(),
@@ -647,7 +652,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     return;
   }
 
-  if (command.kind === "unknown" && !searchIntent && !summaryIntent && !/^\/看视频\s/u.test(authorized.content)) {
+  if (command.kind === "unknown" && !searchIntent && !summaryIntent && !/^\/(?:看视频|看转发)(?:\s|$)/u.test(authorized.content)) {
     try {
       await sendText("这个指令我还不认识。发送「帮助」查看可用指令。");
     } catch (error) {
@@ -656,14 +661,44 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     return;
   }
 
-  if (!authorized.content && !searchIntent && !imageRequested) return;
-
   let settings;
   try {
     settings = readLlmSettings();
   } catch {
     return;
   }
+
+  let forwardedMessages = null;
+  if (settings.forwardReadingEnabled === false && hasForwardMessage(event.message)) {
+    await sendText("转发消息阅读当前已关闭，请管理员在聊天设置中开启。"); return;
+  }
+  if (settings.forwardReadingEnabled !== false) {
+    const source = await resolveForwardSource({ event, ...authorized, text: authorized.content, selfId: numericId(event.self_id),
+      since: authorized.scope === "group" ? settingsForGroup(settings, authorized.groupId).groupPersonaSince : 0, sendAction: sendMessage });
+    if (source) {
+      try {
+        forwardedMessages = await readForwardedMessages(source.message, { sendAction: sendMessage,
+          imageNumbers: [...authorized.content.matchAll(/第\s*(\d{1,3})\s*张/gu)].map(match => Number(match[1])), allowed: () => {
+          const latest = readAccessControl(); return readLlmSettings().forwardReadingEnabled !== false
+            && (authorized.scope === "group" ? latest.groupIds.includes(authorized.groupId) : latest.userIds.includes(authorized.userId));
+        } });
+        // A selected forward replaces implicit previous-image context. Directly
+        // attached images keep priority over the forward's sampled images.
+        images = imageSegments(event.message);
+        if (authorized.imageReference) delete authorized.messageContext.imageSource;
+        if (Array.isArray(images) && settings.visionEnabled) {
+          const chosen = forwardedMessages.images.slice(0, Math.max(0, MAX_IMAGE_COUNT - images.length));
+          forwardedMessages.selectedImageNumbers = chosen.map(image => image.forwardedNumber);
+          forwardedMessages.directImageCount = images.length;
+          images = [...images, ...chosen];
+        } else if (!settings.visionEnabled && forwardedMessages.imageCount) forwardedMessages.notes.push("图片识别关闭，转发图片仅作占位，未识别内容");
+        imageRequested = images === null || images.length > 0;
+      } catch (error) {
+        await sendText(error instanceof ForwardReadError ? error.message : "这次没有读到转发消息，请重新转发或复制其中的文字。"); return;
+      }
+    }
+  }
+  if (!authorized.content && !searchIntent && !imageRequested && !forwardedMessages) return;
 
   const preloadedImageDataUrls = [];
   if (authorized.scope === "group" && authorized.mentioned && !authorized.messageContext?.mentions.some(x => !x.isBot)) {
@@ -676,8 +711,8 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     } catch { console.warn("本群表情偏好暂未保存。"); }
   }
   let preparedImages = [];
-  const tokenExchange = /\btoken\s*来/iu.test(authorized.content) && imageRequested;
-  const explicitStickerRequest = authorized.scope === "group" && authorized.mentioned && isStickerCollectionRequest(authorized.content);
+  const tokenExchange = !forwardedMessages && /\btoken\s*来/iu.test(authorized.content) && imageRequested;
+  const explicitStickerRequest = !forwardedMessages && authorized.scope === "group" && authorized.mentioned && isStickerCollectionRequest(authorized.content);
   let reservedImageSlot = false;
   let videoProgressTimer;
   let waitingForVideo = true;
@@ -713,7 +748,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     reservedImageSlot = true;
     try {
       preparedImages = await readIncomingImages(images, sendMessage, {
-        collectSources: tokenExchange || (authorized.scope === "group" && (settings.stickerLearningEnabled || explicitStickerRequest) && settings.stickersEnabled),
+        collectSources: !forwardedMessages && (tokenExchange || (authorized.scope === "group" && (settings.stickerLearningEnabled || explicitStickerRequest) && settings.stickersEnabled)),
       });
       preloadedImageDataUrls.push(...preparedImages.map((image) => image.dataUrl));
     } catch (error) {
@@ -722,12 +757,15 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       const reply = error instanceof ImageInputError
         ? error.message
         : "这张图片暂时无法安全读取，请重新发送 JPG、PNG 或 WebP 图片。";
-      try { await sendText(reply); } catch {}
-      return;
+      if (forwardedMessages && !forwardedMessages.directImageCount) {
+        forwardedMessages.notes.push("转发内图片未能读取，下面只依据文字记录回答");
+        preparedImages = []; preloadedImageDataUrls.length = 0;
+      } else { try { await sendText(reply); } catch {} return; }
     }
   }
 
   try {
+    if (forwardedMessages) forwardedMessages.imagesRead = Math.max(0, preloadedImageDataUrls.length - (forwardedMessages.directImageCount ?? 0));
     if (tokenExchange && preparedImages[0]?.sourceBytes && readLlmSettings().stickersEnabled) {
       try {
         const bytes = preparedImages[0].sourceBytes;
@@ -761,7 +799,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       userId: `${authorized.scope}:${authorized.groupId ?? authorized.userId}:${authorized.userId}`,
       senderQQId: authorized.userId,
       groupId: authorized.scope === "group" ? authorized.groupId : null,
-      userMessage: summaryIntent ? authorized.content : searchIntent?.query ?? authorized.content,
+      userMessage: (summaryIntent ? authorized.content : searchIntent?.query ?? authorized.content) || (forwardedMessages ? "看看这段转发记录，简要说说主要内容和你的感受。" : ""),
       searchQuery: searchIntent?.query ?? null,
       attachments: [],
       preloadedImageDataUrls,
@@ -769,6 +807,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       followup: Boolean(authorized.followup),
       conversationContext: authorized.scope === "group" && settings.conversationFollowupEnabled ? recentGroupContext(authorized.groupId, event.message_id) : [],
       messageContext: authorized.messageContext,
+      forwardedMessages,
       onVideoStart: () => {
         if (videoProgressTimer) return;
         videoProgressTimer = setTimeout(() => {
@@ -834,7 +873,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     waitingForVideo = false;
     if (videoProgressTimer) clearTimeout(videoProgressTimer);
     if (reservedImageSlot) releaseImageSlot();
-    if (authorized.scope === "group" && preparedImages.length) void learnIncomingStickers({ groupId: authorized.groupId, images: preparedImages });
+    if (!forwardedMessages && authorized.scope === "group" && preparedImages.length) void learnIncomingStickers({ groupId: authorized.groupId, images: preparedImages });
   }
 }
 
@@ -882,6 +921,7 @@ async function main() {
       onLlmSettingsSaved: (settings) => {
         if (!settings.conversationFollowupEnabled) clearGroupConversations();
         if (!settings.visionEnabled) clearRecentGroupImages();
+        if (settings.forwardReadingEnabled === false) clearForwardContext();
         if (!settings.proactiveChatEnabled) clearPassiveContexts();
         if ((!settings.knowledgeLearningEnabled || !settings.knowledgeEnabled) && (!settings.memberImpressionsEnabled || !settings.memberImpressionsLearningEnabled)) clearKnowledgeLearning();
         if (settings.stickersEnabled && settings.visionEnabled) queuePendingStickerDescriptions();
@@ -889,6 +929,7 @@ async function main() {
       onGroupPersonaSaved: (groupId) => {
         clearGroupConversations(groupId);
         clearRecentGroupImages(groupId);
+        clearForwardContext(groupId);
         cancelPendingGroupTurn(groupId);
         cancelContextExpiry(groupId);
         passiveGroupContexts.delete(groupId);
@@ -896,6 +937,7 @@ async function main() {
       onMemberImpressionChanged: (groupId, userId) => {
         clearMemberLearningBuffer(groupId, userId); clearGroupConversations(groupId);
         clearRecentGroupImages(groupId);
+        clearForwardContext(groupId);
         cancelPendingGroupTurn(groupId); passiveGroupContexts.delete(groupId);
       },
     });

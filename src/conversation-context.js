@@ -33,18 +33,18 @@ export function rememberGroupLine({ groupId, userId, text, messageId, isBot = fa
     followups: followup ? (state.bot?.followups ?? 0) + 1 : 0 };
 }
 
-export function isPossibleBotFollowup({ groupId, userId, text, replyIds = [], mentionsOther = false, hasImage = false }) {
+export function isPossibleBotFollowup({ groupId, userId, text, replyIds = [], mentionsOther = false, hasImage = false, hasForward = false }) {
   const state = stateFor(groupId);
   const bot = state?.bot;
   if (!bot || mentionsOther || Date.now() - bot.at > 120000 || bot.followups >= 3 || sensitive.test(text)) return false;
   if (bot.messageId && replyIds.includes(bot.messageId)) return true;
   if (replyIds.length) return false; // A quote of someone else must not become an accidental follow-up.
-  if ((!text.trim() && !hasImage) || text.length > 180) return false;
+  if ((!text.trim() && !hasImage && !hasForward) || text.length > 180) return false;
   const sinceBot = state.lines.filter((line) => !line.isBot && line.at > bot.at).length;
   if (sinceBot >= 5) return false;
   const sameSpeaker = userId === bot.targetUserId;
-  if (hasImage && !text.trim()) return sameSpeaker && Date.now() - bot.at < 45000 && sinceBot < 2;
-  const directed = /(?:^你|[吗呢？?]|怎么|为什么|为啥|什么|啥意思|然后|继续|感觉|说下去|确实|对呀|对啊|哈哈|这(?:个|张|幅).{0,8}(?:图|表情)|动图|gif)/iu.test(text);
+  if ((hasImage || hasForward) && !text.trim()) return sameSpeaker && Date.now() - bot.at < 45000 && sinceBot < 2;
+  const directed = /(?:^你|[吗呢？?]|怎么|为什么|为啥|什么|啥意思|然后|继续|感觉|说下去|确实|对呀|对啊|哈哈|这(?:个|张|幅).{0,8}(?:图|表情)|动图|gif|转发|聊天记录|这段(?:对话|记录))/iu.test(text);
   return directed && (sameSpeaker || (Date.now() - bot.at < 45000 && sinceBot < 2 && /^(?:你|然后呢|感觉什么|什么感觉)/u.test(text)));
 }
 

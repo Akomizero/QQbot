@@ -107,7 +107,7 @@ export function createOneBotBridge({ port, path, accessToken, onMessage, onStatu
     const echo = `codex-${++nextEcho}`;
     const hasOutgoingImage = action === "send_msg" && Array.isArray(params?.message) && params.message.some((segment) => segment?.type === "image");
     const isForward = action === "send_group_forward_msg" || action === "send_private_forward_msg";
-    const actionTimeoutMs = hasOutgoingImage || isForward ? 60_000 : action === "get_image" ? 30_000 : responseTimeoutMs;
+    const actionTimeoutMs = hasOutgoingImage || isForward ? 60_000 : ["get_image", "get_forward_msg"].includes(action) ? 30_000 : responseTimeoutMs;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pendingActions.delete(echo);
