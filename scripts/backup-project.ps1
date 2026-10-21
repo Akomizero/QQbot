@@ -30,7 +30,34 @@ foreach ($folder in @('src','public','data','docs','scripts','test')) {
 foreach ($relative in @('package.json','package-lock.json','README.md','.env','.env.example','.gitignore',
     '.local\admin-auth.json','.local\admin-auth.setup.lock','.local\proactive-chat-state.json','.local\sticker-learning-state.json',
     '.local\knowledge-learning-state.json','.local\model-diagnostics.json',
-    '.local\p0-check-metadata.json')) { Include-File $relative }
+    '.local\model-proxy.json','.local\diagnostic-deliveries-20261021.json',
+    '.local\model-private-pool-health-check-20261021.json','.local\dedicated-bot-route-check-20261021.json',
+    '.local\image-context-ui-20261021.png','.local\image-followup-live-check-20261021.json',
+    '.local\verify-image-followup-live-20261021.mjs',
+    '.local\p0-check-metadata-20261021.json','.local\p0-live-check-metadata-20261021.json',
+    '.local\p0-management-diagnostics-20261021.png',
+    '.local\p0-check-metadata.json','.local\member-live-check-metadata-20261021.json','.local\member-impressions-ui-20261021.png',
+    '.local\group-diagnostic-retries-20261021.json','.local\retry-group-diagnostics-20261021.mjs',
+    '.local\model-route-live-recheck-20261021.json','.local\model-network-control-check-20261021.json',
+    '.local\verify-stickers-20261020.mjs','.local\verify-knowledge.mjs','.local\verify-fallback-emoji.mjs',
+    '.local\frontend-stickers-20261020.png','.local\verify-content-video-20261020.mjs',
+    '.local\frontend-content-filter-20261020.png','.local\bridge-connected-20261020.png',
+    '.local\frontend-knowledge-learning-20261020.png','.local\frontend-group-personas-20261020.png',
+    '.local\frontend-model-retry-20261020.png','.local\frontend-long-reply-20261020.png',
+    '.local\frontend-group-knowledge-20261020.png','.local\frontend-discussion-20261020.png',
+    '.local\frontend-game-announcement-20261020.png','.local\announcement-sample-20261020.txt',
+    '.local\announcement-sample-20261020-1.png','.local\announcement-sample-20261020-2.png',
+    '.local\announcement-check-metadata.json','.local\frontend-content-summary-20261020.png',
+    '.local\summary-sample-20261020.txt','.local\summary-sample-20261020-1.png',
+    '.local\summary-sample-20261020-2.png','.local\summary-check-metadata.json',
+    '.local\frontend-character-recognition-20261020.png','.local\character-baseline-20261020.txt',
+    '.local\character-enhanced-20261020.txt','.local\character-check-metadata.json',
+    '.local\frontend-summary-dates-20261020.png','.local\summary-dates-sample-20261020.txt',
+    '.local\summary-dates-sample-20261020-1.png','.local\summary-dates-check-metadata.json',
+    '.local\frontend-card-layout-20261020.png','.local\card-layout-sample-20261020.txt',
+    '.local\card-layout-sample-20261020-1.png','.local\card-layout-check-metadata.json',
+    '.local\card-layout-live-20261020.txt','.local\card-layout-live-20261020-1.png',
+    '.local\card-layout-live-20261020-2.png')) { Include-File $relative }
 
 $stickerIndexPath = Join-Path $projectRoot '.local\stickers\index.json'
 $stickerIndexHash = $null
@@ -79,6 +106,7 @@ try {
 7. Open the management page, log in with the existing admin password and confirm OneBot is connected.
 8. For local video speech transcription, install Python 3.11+ and run `powershell -File scripts/setup-video.ps1`. The Python environment and model weights are recreated rather than bundled. Video subtitles and image frame extraction do not require this Python environment.
 9. Run `powershell -File scripts/install-autostart.ps1` to install current-user login startup, crash recovery and keep-awake behavior. It uses a scheduled task when available, otherwise the current-user Startup folder. True system sleep, power-off and logout cannot run local bot code; the supervisor prevents automatic system sleep while active.
+10. If `.local/model-proxy.json` is present, it includes private proxy credentials. Keep it private and retain the existing FlClashCore.exe installation and resourceDir referenced in that file. Update those absolute paths if restoring on a different machine. The binary and GeoIP resources are not bundled; the bridge copies the required existing resources into its private proxy home on startup. The matching model proxy URL is preserved in `.env`.
 
 BACKUP-MANIFEST.json lists SHA-256 checksums for every project file. The backup script reads back every ZIP entry and verifies its hash before declaring success. The adjacent .sha256 file protects the archive as a whole.
 '@

@@ -19,7 +19,7 @@ const videoFixturePath = join(fixture, "src", "bilibili-video.js");
 await writeFile(videoFixturePath, (await readFile(videoFixturePath, "utf8")).replace("export async function readBilibiliVideo(", "async function unusedReadBilibiliVideo(") + '\nexport async function readBilibiliVideo(reference) { if (!String(reference).includes("BV1234567890")) throw new VideoReadError("隔离视频读取失败。"); return { title: "虚构测试视频", transcript: "虚构字幕。", frames: [], notes: [] }; }\n');
 process.env.QQBOT_LLM_API_KEY = "isolated-fixture-only-key";
 process.env.TAVILY_API_KEY = "isolated-fixture-only-search-key";
-for (const variable of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) delete process.env[variable];
+for (const variable of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "QQBOT_MODEL_PROXY_URL"]) delete process.env[variable];
 const load = name => import(pathToFileURL(join(fixture, "src", name)));
 const nativeNow = Date.now, nativeTimeout = globalThis.setTimeout;
 let clock = nativeNow();
@@ -42,6 +42,57 @@ const reply = (extra = {}) => { fetchCount = 0; clock += 11000; return llm.getLl
 const payload = (content = "隔离回复", finish = "stop") => Response.json({ choices: [{ finish_reason: finish, message: { content } }] });
 
 const modelProxy = await load("network-proxy.js");
+const localProxy = await load("local-model-proxy.js");
+const localProxyFixture = { version: 1, corePath: join(root, "FlClashCore.exe"), port: 17890, params: { config: { "mixed-port": 17890, "bind-address": "127.0.0.1", "allow-lan": false, tun: { enable: false }, dns: { enable: false }, proxies: [{ name: "fixture" }], authentication: ["fixture:synthetic-secret"] } } };
+await test("optional model proxy accepts authenticated loopback only configuration", async () => { assert.equal(localProxy.validateLocalModelProxyConfig(localProxyFixture), localProxyFixture); });
+await test("model proxy refuses additional listeners and network exposure", async () => {
+  for (const patch of [{ "allow-lan": true }, { "bind-address": "0.0.0.0" }, { tun: { enable: true } }, { dns: { enable: true } }, { "external-controller": "127.0.0.1:9999" }, { listeners: [{}] }, { authentication: [] }, { "proxy-providers": {} }]) {
+    assert.throws(() => localProxy.validateLocalModelProxyConfig({ ...localProxyFixture, params: { config: { ...localProxyFixture.params.config, ...patch } } }));
+  }
+});
+await test("missing optional model proxy config does not launch a process", async () => { const result = await localProxy.startConfiguredModelProxy({ configFile: join(fixture, ".local/missing-proxy.json") }); assert.equal(result.configured, false); await result.stop(); });
+await test("model proxy override is selected without changing the general proxy", async () => {
+  const url = pathToFileURL(join(fixture, "src/network-proxy.js")).href;
+  const code = `const n=await import(${JSON.stringify(url)});const r=await n.createModelDispatcher("https://fixture.invalid");console.log(r.route);await r.dispatcher.close();`;
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", code], { env: { ...process.env, QQBOT_MODEL_PROXY_URL: "http://127.0.0.1:17890" }, encoding: "utf8", windowsHide: true });
+  assert.equal(child.status, 0); assert.equal(child.stdout.trim(), "model_proxy");
+});
+const { createModelConnectionPool } = await load("model-connection-pool.js");
+function fakeConnection() { return { route: "proxy_ipv4", dispatcher: { closed: false, destroyed: false, closes: 0, async close() { this.closed = true; this.closes++; }, async destroy() { this.destroyed = true; } } }; }
+await test("healthy model pools are reused and separate origins stay isolated", async () => {
+  let builds = 0; const pool = createModelConnectionPool({ create: async () => { builds++; return fakeConnection(); } });
+  const a = await pool.acquire("https://first.example/chat"), b = await pool.acquire("https://first.example/other"), c = await pool.acquire("https://second.example/chat");
+  assert.equal(a.entry, b.entry); assert.equal(b.reused, true); assert.notEqual(a.entry, c.entry); assert.equal(builds, 2); await pool.close();
+});
+await test("concurrent model pool setup is shared", async () => {
+  let release, builds = 0; const pool = createModelConnectionPool({ create: async () => { builds++; await new Promise(resolve => { release = resolve; }); return fakeConnection(); } });
+  const first = pool.acquire("https://first.example"), second = pool.acquire("https://first.example"); release();
+  const [a, b] = await Promise.all([first, second]); assert.equal(a.entry, b.entry); assert.equal(builds, 1); await pool.close();
+});
+await test("failed model pool is replaced without invalidating a newer pool", async () => {
+  const pool = createModelConnectionPool({ create: async () => fakeConnection() }); const old = (await pool.acquire("https://first.example")).entry;
+  pool.invalidate(old); const fresh = (await pool.acquire("https://first.example")).entry; pool.invalidate(old);
+  assert.notEqual(old, fresh); assert.equal((await pool.acquire("https://first.example")).entry, fresh); await pool.close();
+});
+await test("retiring model pools drains responses rather than destroying active sockets", async () => {
+  const pool = createModelConnectionPool({ create: async () => fakeConnection() }); const { entry } = await pool.acquire("https://first.example");
+  pool.invalidate(entry); assert.equal(entry.dispatcher.closed, true); assert.equal(entry.dispatcher.destroyed, false); await pool.close();
+});
+await test("model pool lifetime and entry count are bounded", async () => {
+  let time = 0; const pool = createModelConnectionPool({ create: async () => fakeConnection(), now: () => time, ttlMs: 100, maxEntries: 2 });
+  const first = (await pool.acquire("https://first.example")).entry; time = 101;
+  const replacement = (await pool.acquire("https://first.example")).entry; assert.notEqual(first, replacement); assert.equal(first.dispatcher.closed, true);
+  await pool.acquire("https://second.example"); await pool.acquire("https://third.example"); assert.equal(replacement.dispatcher.closed, true); await pool.close();
+});
+await test("a cancelled waiter cannot cancel another request's shared model setup", async () => {
+  let release; const pool = createModelConnectionPool({ create: async (_, options) => { assert.equal(options.signal, undefined); await new Promise(resolve => { release = resolve; }); return fakeConnection(); } });
+  const abort = new AbortController(); const first = pool.acquire("https://first.example", { signal: abort.signal }); const rejected = assert.rejects(first);
+  const second = pool.acquire("https://first.example"); abort.abort(); await rejected; release(); assert.ok((await second).entry.dispatcher); await pool.close();
+});
+await test("closing model pools rejects further acquisitions", async () => {
+  const pool = createModelConnectionPool({ create: async () => fakeConnection() }); const { entry } = await pool.acquire("https://first.example");
+  await pool.close(); assert.equal(entry.dispatcher.closed, true); await assert.rejects(pool.acquire("https://first.example"));
+});
 await test("model proxy resolves IPv4 and rotates addresses within the existing retry budget", async () => {
   const resolver = async () => ["203.0.113.10", "2001:db8::1", "203.0.113.11", "203.0.113.10"];
   assert.equal(await modelProxy.resolveModelConnectAddress("https://model.example/v1/chat/completions", { resolver }), "203.0.113.10");
@@ -69,6 +120,16 @@ await test("model DNS failure falls back to the configured proxy and honors canc
   const controller = new AbortController(); controller.abort();
   await assert.rejects(modelProxy.resolveModelConnectAddress("https://model.example", { signal: controller.signal }));
   assert.equal(await modelProxy.resolveModelConnectAddress("http://127.0.0.1:3010", { resolver: () => { throw Error("Must not resolve"); } }), null);
+});
+await test("model transport keeps the healthy dispatcher for the next model step", async () => {
+  const seen = []; responder = options => { seen.push(options.dispatcher); return payload(); };
+  await reply(); await reply(); assert.equal(seen[0], seen[1]);
+  const last = diagnostics.readModelDiagnostics().filter(e => e.kind === "start").at(-1);
+  if (seen[0]) assert.equal(last.reused, 1);
+});
+await test("model transport replaces the failed dispatcher within the two request limit", async () => {
+  const seen = []; responder = options => { seen.push(options.dispatcher); if (fetchCount === 1) throw new TypeError("synthetic reset", { cause: { code: "ECONNRESET" } }); return payload(); };
+  assert.ok((await reply()).reply); assert.equal(fetchCount, 2); if (seen[0]) assert.notEqual(seen[0], seen[1]);
 });
 
 await test("model success and correlated diagnostics", async () => { responder = () => payload(); assert.equal((await reply()).reply, "隔离回复"); const events = diagnostics.readModelDiagnostics(); assert.equal(new Set(events.slice(-3).map(x => x.id)).size, 1); });
@@ -126,11 +187,104 @@ await test("queued send rechecks a newly added block", async () => { let transmi
 const mainFile = join(fixture, "src", "main.js"), mainSource = await readFile(mainFile, "utf8"), cut = mainSource.lastIndexOf("\nmain().catch(");
 assert.ok(cut > 0); await writeFile(mainFile, mainSource.slice(0, cut) + "\nexport { handleMessage };\n");
 const main = await load("main.js");
+const recentImages = await load("recent-group-images.js");
+const imageSegment = { type: "image", data: { file: "ABCDEF0123456789ABCDEF0123456789.jpg", sub_type: 0 } };
+const imageEvent = (groupId = "111", userId = "444", at = clock, messageId = "-321") => ({ group_id: groupId, user_id: userId, message_id: messageId, time: Math.floor(at / 1000), message: [imageSegment] });
+const imageQuestion = (group = "111", user = "444") => ({ event: { user_id: user, message_id: "-322", message: [] }, groupId: group, selfId: "999", text: "如何评价", sendAction: async () => ({ messages: [] }) });
+await test("recent images associate with the same sender in every group", async () => {
+  recentImages.clearRecentGroupImages();
+  for (const groupId of ["111", "222", "333"]) {
+    recentImages.rememberGroupImages({ event: imageEvent(groupId), groupId, selfId: "999" });
+    const found = await recentImages.resolveRecentGroupImages(imageQuestion(groupId)); assert.equal(found.messageId, "-321"); assert.equal(found.groupId, groupId);
+  }
+});
+await test("recent image references do not cross groups or users", async () => {
+  recentImages.clearRecentGroupImages(); recentImages.rememberGroupImages({ event: imageEvent(), groupId: "111", selfId: "999" });
+  assert.equal(await recentImages.resolveRecentGroupImages(imageQuestion("222")), null);
+  assert.equal(await recentImages.resolveRecentGroupImages(imageQuestion("111", "555")), null);
+});
+await test("expired image references and pre-persona history are not selected", async () => {
+  const question = imageQuestion(); question.now = clock + 181000;
+  assert.equal(await recentImages.resolveRecentGroupImages(question), null);
+  recentImages.rememberGroupImages({ event: imageEvent(), groupId: "111", selfId: "999" });
+  assert.equal(await recentImages.resolveRecentGroupImages({ ...imageQuestion(), since: clock + 1 }), null);
+});
+await test("ordinary text and messages addressed to others do not inherit images", async () => {
+  recentImages.clearRecentGroupImages(); recentImages.rememberGroupImages({ event: imageEvent(), groupId: "111", selfId: "999" });
+  assert.equal(await recentImages.resolveRecentGroupImages({ ...imageQuestion(), text: "今天天气如何" }), null);
+  const question = imageQuestion(); question.event.message = [{ type: "at", data: { qq: "555" } }];
+  assert.equal(await recentImages.resolveRecentGroupImages(question), null);
+});
+await test("images addressed to another member are not cached for bot", async () => {
+  recentImages.clearRecentGroupImages(); const event = imageEvent(); event.message.push({ type: "at", data: { qq: "555" } });
+  recentImages.rememberGroupImages({ event, groupId: "111", selfId: "999" });
+  assert.equal(await recentImages.resolveRecentGroupImages(imageQuestion()), null);
+});
+await test("recent same-group history recovers image association after restart", async () => {
+  recentImages.clearRecentGroupImages();
+  const found = await recentImages.resolveRecentGroupImages({ ...imageQuestion(), sendAction: async () => ({ messages: [imageEvent()] }) });
+  assert.equal(found.messageId, "-321"); assert.ok(!JSON.stringify(found).includes("base64"));
+});
+await test("explicit quoted image wins while cross-group quotes never substitute a recent image", async () => {
+  const question = imageQuestion(); question.event.message = [{ type: "reply", data: { id: "-9991" } }];
+  const found = await recentImages.resolveRecentGroupImages({ ...question, sendAction: async () => imageEvent("111", "555", clock, "-9991") });
+  assert.equal(found.userId, "555"); assert.equal(found.messageId, "-9991");
+  assert.equal(await recentImages.resolveRecentGroupImages({ ...question, sendAction: async () => imageEvent("222", "555", clock, "-9991") }), null);
+});
+await test("invalid platform image identifiers never enter recent references", async () => {
+  recentImages.clearRecentGroupImages(); const event = imageEvent(); event.message = [{ type: "image", data: { file: "C:/private/file.jpg" } }];
+  recentImages.rememberGroupImages({ event, groupId: "111", selfId: "999" });
+  assert.equal(await recentImages.resolveRecentGroupImages(imageQuestion()), null);
+});
+await test("queued image references recheck expiry and changed context cutoff", async () => {
+  recentImages.clearRecentGroupImages(); recentImages.rememberGroupImages({ event: imageEvent(), groupId: "111", selfId: "999" });
+  const reference = await recentImages.resolveRecentGroupImages(imageQuestion());
+  assert.equal(recentImages.canUseRecentGroupImages(reference, { groupId: "111" }), true);
+  assert.equal(recentImages.canUseRecentGroupImages(reference, { groupId: "222" }), false);
+  assert.equal(recentImages.canUseRecentGroupImages(reference, { groupId: "111", since: clock + 1 }), false);
+  assert.equal(recentImages.canUseRecentGroupImages(reference, { groupId: "111", now: clock + 181000 }), false);
+});
 let messagesSent = [], sequence = 1000;
 const fakeOneBot = async (action, params) => { if (action === "get_group_msg_history") return { messages: [] }; if (action === "get_msg") return { group_id: "111", time: Math.floor(clock / 1000), user_id: "555", message: [{ type: "text", data: { text: "群友原话" } }] }; if (action === "send_msg") { messagesSent.push(params); return { message_id: String(-++sequence) }; } throw new Error("Unexpected fake action: " + action); };
 function inbound(message, group = "111") { clock += 11000; return { post_type: "message", message_type: "group", group_id: group, self_id: "999", user_id: "444", message_id: String(++sequence), sender: { nickname: "测试成员" }, message }; }
 await test("real handler does not interrupt an @other message", async () => { messagesSent = []; fetchCount = 0; responder = () => payload(); await main.handleMessage(inbound([{ type: "at", data: { qq: "555" } }, { type: "text", data: { text: "你觉得肥鱼怎么样？" } }]), { sendMessage: fakeOneBot }, {}); assert.equal(messagesSent.length, 0); assert.equal(fetchCount, 0); });
 await test("real handler injects structured quote context into model", async () => { messagesSent = []; responder = options => { const content = JSON.parse(options.body).messages.map(x => typeof x.content === "string" ? x.content : "").join("\n"); assert.match(content, /群友原话/u); assert.match(content, /speakerId/u); return payload("是另一位群友说的。"); }; await main.handleMessage(inbound([{ type: "at", data: { qq: "999" } }, { type: "reply", data: { id: "-555" } }, { type: "text", data: { text: "这是谁说的？" } }]), { sendMessage: fakeOneBot }, {}); assert.equal(messagesSent.length, 1); });
+await test("a successful automatic model retry actually sends its reply exactly once", async () => {
+  messagesSent = []; fetchCount = 0; responder = () => { if (fetchCount === 1) throw new TypeError("synthetic reset", { cause: { code: "ECONNRESET" } }); return payload("补试成功后的实际回复"); };
+  await main.handleMessage(inbound([{ type: "at", data: { qq: "999" } }, { type: "text", data: { text: "连接恢复后回复我" } }]), { sendMessage: fakeOneBot }, {});
+  assert.equal(fetchCount, 2); assert.equal(messagesSent.length, 1); assert.ok(JSON.stringify(messagesSent[0]).includes("补试成功后的实际回复"));
+  assert.ok(!JSON.stringify(messagesSent[0]).includes("暂时无法连接"));
+});
+const syntheticImage = (await sharp({ create: { width: 8, height: 8, channels: 3, background: "green" } }).png().toBuffer()).toString("base64");
+await test("real handler attaches a separately sent image to the later mentioned question", async () => {
+  config.writeLlmSettings(base); recentImages.clearRecentGroupImages(); context.clearGroupConversations(); messagesSent = []; fetchCount = 0; let imageReads = 0;
+  const imageOneBot = (action, params) => action === "get_image" ? (imageReads++, Promise.resolve({ base64: syntheticImage })) : fakeOneBot(action, params);
+  await main.handleMessage(inbound([imageSegment]), { sendMessage: imageOneBot }, {});
+  assert.equal(imageReads, 0); assert.equal(fetchCount, 0);
+  responder = options => { const messages = JSON.parse(options.body).messages; assert.ok(messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === "image_url"))); assert.match(JSON.stringify(messages), /这次请bot看的图片/u); return payload("这张表情是在调皮地接话。"); };
+  await main.handleMessage(inbound([{ type: "at", data: { qq: "999" } }, { type: "text", data: { text: "如何评价" } }]), { sendMessage: imageOneBot }, {});
+  assert.equal(imageReads, 1); assert.equal(messagesSent.length, 1); assert.match(JSON.stringify(messagesSent[0]), /调皮地接话/u);
+});
+await test("same member image follow-up without @ still carries the image", async () => {
+  messagesSent = []; let imageReads = 0;
+  const imageOneBot = (action, params) => action === "get_image" ? (imageReads++, Promise.resolve({ base64: syntheticImage })) : fakeOneBot(action, params);
+  responder = options => { assert.ok(JSON.parse(options.body).messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === "image_url"))); return payload("是在这个表情里装可爱呀。"); };
+  await main.handleMessage(inbound([{ type: "text", data: { text: "这个图片" } }]), { sendMessage: imageOneBot }, {});
+  assert.equal(imageReads, 1); assert.equal(messagesSent.length, 1);
+});
+await test("image-only reply to bot during an active turn is understood as addressed to bot", async () => {
+  messagesSent = []; let imageReads = 0;
+  const imageOneBot = (action, params) => action === "get_image" ? (imageReads++, Promise.resolve({ base64: syntheticImage })) : fakeOneBot(action, params);
+  responder = () => payload("这张也挺会接梗。");
+  await main.handleMessage(inbound([imageSegment]), { sendMessage: imageOneBot }, {});
+  assert.equal(imageReads, 1); assert.equal(messagesSent.length, 1);
+});
+await test("disabled vision never reads an inherited image", async () => {
+  config.writeLlmSettings({ ...base, visionEnabled: false }); messagesSent = []; let imageReads = 0;
+  responder = options => { assert.ok(!JSON.parse(options.body).messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === "image_url"))); return payload("现在不能看图。"); };
+  await main.handleMessage(inbound([{ type: "at", data: { qq: "999" } }, { type: "text", data: { text: "这个图片" } }]), { sendMessage: (action, params) => action === "get_image" ? (imageReads++, Promise.resolve({ base64: syntheticImage })) : fakeOneBot(action, params) }, {});
+  assert.equal(imageReads, 0); config.writeLlmSettings(base); recentImages.clearRecentGroupImages(); context.clearGroupConversations();
+});
 
 const kb = await load("knowledge-base.js"), learner = await load("knowledge-learning.js");
 await test("quoted teaching reaches learner with a specific sticker link", async () => {
@@ -194,6 +348,7 @@ await test("management API authentication and scoped reads", async () => {
   assert.equal((await api("/api/knowledge/learn", "POST", { groupId: "111" }, cookie)).status, 409);
 });
 if (server) await new Promise(resolve => server.close(resolve));
+await (await load("model-transport.js")).closeModelConnections();
 Date.now = nativeNow; globalThis.setTimeout = nativeTimeout;
 report.passed = report.cases.filter(x => x.passed).length; report.failed = report.cases.length - report.passed;
 await writeFile(join(root, ".local", "p0-check-metadata.json"), JSON.stringify(report, null, 2));

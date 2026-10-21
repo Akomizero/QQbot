@@ -37,6 +37,8 @@ const configuredProxy = process.env.HTTPS_PROXY?.trim()
   || process.env.HTTP_PROXY?.trim()
   || process.env.http_proxy?.trim()
   || readWindowsProxyUrl();
+const modelProxyOverride = process.env.QQBOT_MODEL_PROXY_URL?.trim();
+const configuredModelProxy = modelProxyOverride || configuredProxy;
 
 const modelAddressCache = new Map();
 
@@ -72,6 +74,10 @@ export function modelProxyOptions(proxyUrl, endpoint, address) {
   const authority = address + ":" + (url.port || "443");
   return {
     uri: proxyUrl,
+    connections: 2,
+    pipelining: 1,
+    keepAliveTimeout: 60_000,
+    keepAliveMaxTimeout: 60_000,
     // Only CONNECT's destination changes. HTTP Host, SNI and certificate checks
     // still use the configured endpoint. Never disable certificate validation.
     requestTls: { servername: url.hostname, rejectUnauthorized: true },
@@ -85,9 +91,10 @@ export function modelProxyOptions(proxyUrl, endpoint, address) {
 }
 
 export async function createModelDispatcher(endpoint, options = {}) {
-  if (!configuredProxy) return { dispatcher: undefined, route: "direct" };
+  if (!configuredModelProxy) return { dispatcher: undefined, route: "direct" };
   const address = endpoint ? await resolveModelConnectAddress(endpoint, options) : null;
-  return { dispatcher: new ProxyAgent(address ? modelProxyOptions(configuredProxy, endpoint, address) : configuredProxy), route: address ? "proxy_ipv4" : "proxy" };
+  const scope = modelProxyOverride ? "model_proxy" : "proxy";
+  return { dispatcher: new ProxyAgent(address ? modelProxyOptions(configuredModelProxy, endpoint, address) : { uri: configuredModelProxy, connections: 2, keepAliveTimeout: 60_000, keepAliveMaxTimeout: 60_000 }), route: address ? scope + "_ipv4" : scope };
 }
 
 // Internal only: public-page requests use their own pinned CONNECT transport.

@@ -1,8 +1,10 @@
-import { createModelDispatcher } from "./network-proxy.js";
+import { createModelConnectionPool } from "./model-connection-pool.js";
 import { withModelOperation, recordModelDiagnostic } from "./model-diagnostics.js";
 
 const retryableCodes = new Set(["ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENOTFOUND", "ETIMEDOUT", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT"]);
 let requestSequence = 0;
+const connections = createModelConnectionPool();
+export const closeModelConnections = () => connections.close();
 const logTime = () => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 19).replace("T", " ") + " +08:00";
 
 export async function fetchModel(endpoint, options) {
@@ -15,13 +17,13 @@ async function fetchModelInternal(endpoint, { modelRetries = true, modelAttempt 
   const firstAttempt = Number.isInteger(modelAttempt) && modelAttempt > 0 && modelAttempt < 100 ? modelAttempt : 1;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const startedAt = Date.now();
-    // A retry uses a new proxy tunnel instead of a potentially broken pooled socket.
-    const { dispatcher, route } = await createModelDispatcher(endpoint, { attempt: firstAttempt + attempt, signal: options.signal });
+    const { entry, reused } = await connections.acquire(endpoint, { attempt: firstAttempt + attempt, signal: options.signal });
+    const { dispatcher, route } = entry;
     try {
-      recordModelDiagnostic("start", { attempt: firstAttempt + attempt, route });
+      recordModelDiagnostic("start", { attempt: firstAttempt + attempt, route, connection: entry.id, reused: reused ? 1 : 0 });
       const response = await fetch(endpoint, { ...options, ...(dispatcher ? { dispatcher } : {}) });
-      if (dispatcher) void dispatcher.close().catch(() => {});
       recordModelDiagnostic("http", { attempt: firstAttempt + attempt, route, status: response.status, elapsedMs: Date.now() - startedAt });
+      if ([500, 502, 503, 504].includes(response.status)) connections.invalidate(entry);
       if ([500, 502, 503, 504].includes(response.status) && attempt < attempts - 1 && !options.signal?.aborted) {
         await response.body?.cancel();
         console.warn(`${logTime()} 模型请求 ${requestId}（第${firstAttempt + attempt}次）HTTP ${response.status}，稍后重试。`);
@@ -31,7 +33,7 @@ async function fetchModelInternal(endpoint, { modelRetries = true, modelAttempt 
       return response;
     }
     catch (error) {
-      if (dispatcher) void dispatcher.destroy().catch(() => {});
+      connections.invalidate(entry);
       const rawCode = error?.cause?.code ?? error?.cause?.errors?.[0]?.code ?? error?.code;
       const code = retryableCodes.has(rawCode) ? rawCode : "FETCH_FAILED";
       const retry = attempt < attempts - 1 && retryableCodes.has(code) && !options.signal?.aborted;

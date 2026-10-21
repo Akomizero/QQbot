@@ -287,6 +287,7 @@
               </div>
               <div class="settings-field settings-toggle">
                 <label for="vision-enabled"><input id="vision-enabled" type="checkbox">启用图片识别</label>
+                <p class="field-hint">所有授权群都支持：先发图，3分钟内再 @bot 说“如何评价”“这个图片”，会关联同一成员最近一次图片；引用图片消息可明确指定15分钟内的图。正在与bot对话时，45秒内补发图片也可接话。图片关联按群隔离，仅在内存暂存QQ文件标识，不保存原图；GIF当前只看首帧。</p>
                 <p class="field-hint">需在 NapCat 启用 enableLocalFile2Url。支持 JPG、PNG、WebP 和 GIF 表情；动态表情转成首帧识别。机器人通过 OneBot get_image 读取 Base64，并限制大小、数量和像素。</p>
               </div>
               <div class="settings-field settings-toggle">

@@ -10,7 +10,7 @@ export function modelOperationId() { return context.getStore()?.id ?? randomUUID
 export function recordModelDiagnostic(kind, values = {}) {
   if (!kinds.has(kind)) return;
   const event = { at: Date.now(), id: context.getStore()?.id ?? values.id ?? modelOperationId(), kind };
-  for (const key of ["attempt", "status", "elapsedMs", "tokens"]) if (Number.isFinite(values[key])) event[key] = values[key];
+  for (const key of ["attempt", "status", "elapsedMs", "tokens", "connection", "reused"]) if (Number.isFinite(values[key])) event[key] = values[key];
   for (const key of ["code", "route", "phase", "finish"]) if (typeof values[key] === "string" && /^[a-zA-Z0-9_-]{1,60}$/u.test(values[key])) event[key] = values[key];
   events.push(event); events = events.slice(-80);
   try { mkdirSync(new URL("../.local/", import.meta.url), { recursive: true }); const temp = new URL(file.href + ".tmp"); writeFileSync(temp, JSON.stringify(events), { mode: 0o600 }); renameSync(temp, file); } catch {}
@@ -22,5 +22,5 @@ export function withModelOperation(task) {
 }
 export function readModelDiagnostics() {
   // Only fixed categories and counters are retained; never prompts, URLs or provider bodies.
-  return events.slice(-40).map(({ at, id, kind, attempt, status, elapsedMs, tokens, code, route, phase, finish }) => ({ at, id, kind, attempt, status, elapsedMs, tokens, code, route, phase, finish }));
+  return events.slice(-40).map(({ at, id, kind, attempt, status, elapsedMs, tokens, code, route, phase, finish, connection, reused }) => ({ at, id, kind, attempt, status, elapsedMs, tokens, code, route, phase, finish, connection, reused }));
 }

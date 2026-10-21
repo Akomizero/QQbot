@@ -31,6 +31,9 @@ import { resolveMessageContext, messageReferences } from "./message-context.js";
 import { noteStickerFeedback } from "./sticker-preferences.js";
 import { memberMemoryCommand, forgetMemberImpression, resumeMemberImpression, memberLearningStamp } from "./member-impressions.js";
 import { clearMemberLearningBuffer } from "./knowledge-learning.js";
+import { startConfiguredModelProxy } from "./local-model-proxy.js";
+import { closeModelConnections } from "./model-transport.js";
+import { rememberGroupImages, resolveRecentGroupImages, clearRecentGroupImages, canUseRecentGroupImages } from "./recent-group-images.js";
 
 const sensitiveValues = new Set();
 const seenMessageIds = new Map();
@@ -480,11 +483,14 @@ async function handleMessage(event, { sendMessage }, config) {
   if (!authorized || isDuplicate(event.message_id, authorized.scope)) return;
   if (authorized.scope === "group") {
     let followupEnabled = false;
+    let visionEnabled = false;
     let personaSince = 0;
     try {
       const settings = settingsForGroup(readLlmSettings(), authorized.groupId);
       personaSince = settings.groupPersonaSince;
       followupEnabled = settings.conversationFollowupEnabled;
+      visionEnabled = settings.visionEnabled;
+      if (visionEnabled) rememberGroupImages({ event, groupId: authorized.groupId, selfId: authorized.selfId, since: personaSince });
       if (settings.nicknameTriggerEnabled && settings.botAliases.some((name) => {
         const text = authorized.content.toLocaleLowerCase("zh-CN"), alias = name.toLocaleLowerCase("zh-CN");
         return text.includes(alias) && (!hasAnyMention(event.message) || text.startsWith(alias));
@@ -503,9 +509,19 @@ async function handleMessage(event, { sendMessage }, config) {
     }
     try { acknowledgeGroupReply({ groupId: authorized.groupId, mentioned: authorized.mentioned, text: authorized.content, replyIds: segmentsOf(event.message).filter((segment) => segment?.type === "reply").map((segment) => String(segment.data?.id ?? "")) }); } catch {}
     if (followupEnabled && !authorized.mentioned && isPossibleBotFollowup({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content,
-      replyIds: messageReferences(event.message).replyIds, mentionsOther: hasAnyMention(event.message) })) {
+      replyIds: messageReferences(event.message).replyIds, mentionsOther: hasAnyMention(event.message),
+      hasImage: visionEnabled && Array.isArray(event.message) && event.message.some(segment => segment?.type === "image") })) {
       authorized.mentioned = true;
       authorized.followup = true;
+    }
+    if (visionEnabled && authorized.mentioned && Array.isArray(event.message) && !event.message.some(segment => segment?.type === "image")) {
+      authorized.imageReference = await resolveRecentGroupImages({ event, groupId: authorized.groupId, selfId: authorized.selfId,
+        text: authorized.content, since: personaSince, sendAction: sendMessage });
+      if (authorized.imageReference) authorized.messageContext.imageSource = {
+        messageId: authorized.imageReference.messageId, speakerId: authorized.imageReference.userId,
+        relation: authorized.messageContext.reply ? "明确引用的图片" : "当前发言者刚才发来、这次请bot看的图片",
+        ageSeconds: Math.max(0, Math.round((Date.now() - authorized.imageReference.at) / 1000)),
+      };
     }
     if (followupEnabled) rememberGroupLine({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content, messageId: event.message_id,
       name: event.sender?.card || event.sender?.nickname });
@@ -534,6 +550,7 @@ async function handleMessage(event, { sendMessage }, config) {
         else resumeMemberImpression(authorized.groupId, authorized.userId);
         clearMemberLearningBuffer(authorized.groupId, authorized.userId);
         clearGroupConversations(authorized.groupId);
+        clearRecentGroupImages(authorized.groupId);
         cancelPendingGroupTurn(authorized.groupId);
         passiveGroupContexts.delete(authorized.groupId);
         authorized.memberMemoryAction = memoryCommand;
@@ -543,6 +560,12 @@ async function handleMessage(event, { sendMessage }, config) {
   const task = async () => {
     const latest = readAccessControl();
     if (authorized.scope === "group" ? !latest.groupIds.includes(authorized.groupId) : !latest.userIds.includes(authorized.userId)) return;
+    if (authorized.imageReference && !canUseRecentGroupImages(authorized.imageReference, {
+      groupId: authorized.groupId, since: settingsForGroup(readLlmSettings(), authorized.groupId).groupPersonaSince,
+    })) {
+      delete authorized.imageReference;
+      delete authorized.messageContext.imageSource;
+    }
     await handleAuthorizedMessage(event, { sendMessage: pacedSend }, config, authorized, latest);
   };
   if (authorized.scope === "private" || authorized.mentioned) return queueConversationReply(`${authorized.scope}:${authorized.groupId ?? authorized.userId}`, task);
@@ -580,7 +603,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
 
   const searchIntent = parseSearchIntent(authorized.content);
   const summaryIntent = parseSummaryIntent(authorized.content);
-  const images = imageSegments(event.message);
+  const images = authorized.imageReference?.images ?? imageSegments(event.message);
   const imageRequested = images === null || images.length > 0;
   if (authorized.scope === "group" && command.kind === "none" && !searchIntent && !summaryIntent
     && segmentsOf(event.message).every((segment) => ["text", "at", "image", "reply"].includes(segment?.type))) {
@@ -845,7 +868,10 @@ async function main() {
     onMessage: (event, context) => handleMessage(event, context, config),
   });
   let managementServer;
+  let modelProxy;
   try {
+    modelProxy = await startConfiguredModelProxy();
+    if (controller.signal.aborted) return;
     await bridge.start();
     managementServer = await startManagementServer({
       getOneBotStatus: () => ({
@@ -854,18 +880,21 @@ async function main() {
       }),
       onLlmSettingsSaved: (settings) => {
         if (!settings.conversationFollowupEnabled) clearGroupConversations();
+        if (!settings.visionEnabled) clearRecentGroupImages();
         if (!settings.proactiveChatEnabled) clearPassiveContexts();
         if ((!settings.knowledgeLearningEnabled || !settings.knowledgeEnabled) && (!settings.memberImpressionsEnabled || !settings.memberImpressionsLearningEnabled)) clearKnowledgeLearning();
         if (settings.stickersEnabled && settings.visionEnabled) queuePendingStickerDescriptions();
       },
       onGroupPersonaSaved: (groupId) => {
         clearGroupConversations(groupId);
+        clearRecentGroupImages(groupId);
         cancelPendingGroupTurn(groupId);
         cancelContextExpiry(groupId);
         passiveGroupContexts.delete(groupId);
       },
       onMemberImpressionChanged: (groupId, userId) => {
         clearMemberLearningBuffer(groupId, userId); clearGroupConversations(groupId);
+        clearRecentGroupImages(groupId);
         cancelPendingGroupTurn(groupId); passiveGroupContexts.delete(groupId);
       },
     });
@@ -877,6 +906,8 @@ async function main() {
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
     await bridge.close();
+    await closeModelConnections();
+    await modelProxy?.stop();
     if (managementServer) {
       await new Promise((resolveClose, rejectClose) => {
         managementServer.close((error) => error ? rejectClose(error) : resolveClose());
