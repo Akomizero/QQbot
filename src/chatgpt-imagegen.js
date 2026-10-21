@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { get } from "node:http";
 import sharp from "sharp";
+import { buildImageGenerationPrompt } from "./image-prompt.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const folder = join(root, ".local", "chatgpt-images");
@@ -119,7 +120,10 @@ export async function generateChatGptImage({ prompt, sourceKey, allowed = () => 
       writeFileSync(reference, await sharp(bytes, { limitInputPixels: 32_000_000 }).png().toBuffer(), { mode: 0o600 });
       localReferences.push(reference);
     }
-    await runHelper(`请实际生成一张图片：${prompt}\n画面适合普通群聊展示，避免血腥、排泄物和令人反胃的内容。`, output, allowed, localReferences);
+    const brief = buildImageGenerationPrompt(prompt, { referenceCount: localReferences.length });
+    const promptMetadata = { promptVersion: brief.version, promptMode: brief.mode, promptProfile: brief.profile, promptCharacters: brief.characters };
+    writeFileSync(jobFile, JSON.stringify({ id, state: "running", at: Date.now(), ...promptMetadata }), { mode: 0o600 });
+    await runHelper(brief.text, output, allowed, localReferences);
     if (!allowed()) throw new ChatGptImageError("CANCELLED", "这次画图请求已取消。");
     const original = readFileSync(output);
     if (original.length > 24 * 1024 * 1024) throw new ChatGptImageError("IMAGE_SIZE", "生成的图片过大，暂时无法发送。");
@@ -128,7 +132,7 @@ export async function generateChatGptImage({ prompt, sourceKey, allowed = () => 
     if (!["png", "webp", "jpeg"].includes(metadata.format)) throw new ChatGptImageError("IMAGE_FORMAT", "网页返回的内容不是可确认的图片。");
     const bytes = await image.resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true }).png().toBuffer();
     if (bytes.length > 8 * 1024 * 1024) throw new ChatGptImageError("IMAGE_SIZE", "生成的图片过大，暂时无法发送。");
-    writeFileSync(jobFile, JSON.stringify({ id, state: "generated", at: Date.now(), width: metadata.width, height: metadata.height }), { mode: 0o600 });
+    writeFileSync(jobFile, JSON.stringify({ id, state: "generated", at: Date.now(), width: metadata.width, height: metadata.height, ...promptMetadata }), { mode: 0o600 });
     return { id, bytes, path: output, width: metadata.width, height: metadata.height };
   }).catch(error => {
     writeFileSync(jobFile, JSON.stringify({ id, state: "failed", at: Date.now(), code: error.code ?? "FAILED" }), { mode: 0o600 });
@@ -140,5 +144,8 @@ export async function generateChatGptImage({ prompt, sourceKey, allowed = () => 
 
 export function recordGeneratedImageDelivery(id, state, messageId = null) {
   if (!/^[a-f0-9]{32}$/u.test(id) || !["sending", "delivered", "uncertain"].includes(state)) throw new Error("Invalid image receipt");
-  writeFileSync(join(folder, `${id}.json`), JSON.stringify({ id, state, at: Date.now(), ...(messageId ? { messageId: String(messageId) } : {}) }), { mode: 0o600 });
+  const file = join(folder, `${id}.json`);
+  let previous = {};
+  try { previous = JSON.parse(readFileSync(file, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  writeFileSync(file, JSON.stringify({ ...previous, id, state, at: Date.now(), ...(messageId ? { messageId: String(messageId) } : {}) }), { mode: 0o600 });
 }
