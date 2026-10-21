@@ -492,12 +492,14 @@ async function handleMessage(event, { sendMessage }, config) {
   if (!authorized || isDuplicate(event.message_id, authorized.scope)) return;
   if (authorized.scope === "group") {
     let followupEnabled = false;
+    let videoDiscoveryEnabled = false;
     let visionEnabled = false;
     let personaSince = 0;
     try {
       const settings = settingsForGroup(readLlmSettings(), authorized.groupId);
       personaSince = settings.groupPersonaSince;
       followupEnabled = settings.conversationFollowupEnabled;
+      videoDiscoveryEnabled = settings.videoDiscoveryEnabled && settings.videoDiscoveryGroupIds.includes(authorized.groupId);
       visionEnabled = settings.visionEnabled;
       if (settings.forwardReadingEnabled !== false) rememberForwardMessage({ event, ...authorized });
       if (visionEnabled) rememberGroupImages({ event, groupId: authorized.groupId, selfId: authorized.selfId, since: personaSince });
@@ -535,8 +537,8 @@ async function handleMessage(event, { sendMessage }, config) {
         ageSeconds: Math.max(0, Math.round((Date.now() - authorized.imageReference.at) / 1000)),
       };
     }
-    if (followupEnabled) rememberGroupLine({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content, messageId: event.message_id,
-      name: event.sender?.card || event.sender?.nickname });
+    if (followupEnabled || videoDiscoveryEnabled) rememberGroupLine({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content, messageId: event.message_id,
+      name: event.sender?.card || event.sender?.nickname, addressedToBot: authorized.mentioned });
     if (authorized.mentioned) {
       cancelPendingGroupTurn(authorized.groupId);
       const context = passiveGroupContexts.get(authorized.groupId);

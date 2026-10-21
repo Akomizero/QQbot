@@ -1,4 +1,5 @@
 import { groupMemberContextSince } from "./member-impressions.js";
+import { createHash } from "node:crypto";
 const groups = new Map();
 const ttl = 15 * 60_000;
 const sensitive = /(?:sk-[a-z\d]{12,}|tvly-|api.?key|密钥|密码|cookie|sessdata|身份证|手机号|家庭住址|\b\d{11,}\b)/iu;
@@ -19,13 +20,15 @@ function stateFor(groupId) {
   return state;
 }
 
-export function rememberGroupLine({ groupId, userId, text, messageId, isBot = false, at = Date.now(), followup = false, targetUserId = null, name = "", stickerId = null }) {
+export function rememberGroupLine({ groupId, userId, text, messageId, isBot = false, at = Date.now(), followup = false, targetUserId = null, name = "", stickerId = null, addressedToBot = false }) {
   if (!/^\d{1,32}$/u.test(groupId) || typeof text !== "string" || !text.trim() || text.length > 4000 || sensitive.test(text) || (isBot && errorReply.test(text))) return;
   const state = stateFor(groupId);
-  if (!state || (messageId && state.lines.some((line) => line.messageId === String(messageId)))) return;
+  if (!state) return;
+  const existing = messageId && state.lines.find(line => line.messageId === String(messageId));
+  if (existing) { if (addressedToBot) existing.addressedToBot = true; return; }
   const previousMember = [...state.lines].reverse().find((line) => !line.isBot);
   state.lines.push({ userId, text: text.trim().slice(0, 500), messageId: messageId ? String(messageId) : null, isBot, at,
-    name: String(name).slice(0, 40), stickerId: /^[a-f\d-]{36}$/u.test(stickerId ?? "") ? stickerId : null });
+    name: String(name).slice(0, 40), stickerId: /^[a-f\d-]{36}$/u.test(stickerId ?? "") ? stickerId : null, addressedToBot });
   state.lines.sort((a, b) => a.at - b.at);
   state.lines = state.lines.slice(-20);
   state.updatedAt = Date.now();
@@ -55,6 +58,20 @@ export function recentGroupContext(groupId, excludeId) {
     return { speaker: line.isBot ? "机器人（bot实际已发出的回复）" : names.get(line.userId), speakerId: line.isBot ? "bot" : line.userId,
       name: line.name, text: line.text, isBot: line.isBot, messageId: line.messageId };
   });
+}
+
+// A short live discussion window; no extra transcript is written to disk.
+export function videoDiscussionContext(groupId, now = Date.now()) {
+  const lines = (stateFor(groupId)?.lines ?? []).filter(line => line.at <= now && now - line.at <= 180000).slice(-10);
+  const members = lines.filter(line => !line.isBot);
+  const latest = lines.at(-1);
+  if (!latest || !members.length || (members.length < 2 && members[0].text.length < 6)) return { code: "WAITING_DISCUSSION" };
+  if (latest.isBot) return { code: "WAITING_MEMBER" };
+  if (latest.addressedToBot) return { code: "WAITING_BOT_REPLY" };
+  if (now - latest.at < 12000) return { code: "WAITING_GAP" };
+  // Expiry of older lines must not look like a new member turn.
+  const key = createHash("sha256").update(JSON.stringify([latest.messageId, latest.at, latest.text])).digest("hex");
+  return { code: "DISCUSSION_READY", key, context: lines.map(line => ({ isBot: line.isBot, text: line.text, at: line.at })) };
 }
 
 export async function warmGroupContext({ groupId, selfId, sendAction, since = 0 }) {

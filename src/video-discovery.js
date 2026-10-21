@@ -4,7 +4,7 @@ import { readAccessControl } from "./access-control-store.js";
 import { readLlmSettings } from "./llm-settings-store.js";
 import { settingsForGroup } from "./group-personas.js";
 import { getLlmApiKey } from "./config.js";
-import { recentGroupContext } from "./conversation-context.js";
+import { videoDiscussionContext } from "./conversation-context.js";
 import { browseBilibiliFeed, watchBilibiliCandidate } from "./bilibili-browser.js";
 import { decideBilibiliDiscovery } from "./llm.js";
 import { proactiveQuietUntil } from "./proactive-chat-state.js";
@@ -46,10 +46,12 @@ export function readVideoDiscoveryStatus() {
     try { if (["sending", "uncertain"].includes(JSON.parse(readFileSync(new URL(name, receipts), "utf8")).state)) uncertain++; } catch {}
   } } catch {}
   return { enabled: settings.videoDiscoveryEnabled, videoUnderstandingEnabled: settings.videoUnderstandingEnabled, active, uncertain,
+    mode: "conversation",
     groups: settings.videoDiscoveryGroupIds.filter(id => access.groupIds.includes(id)).map(groupId => {
       const group = state.groups[groupId] ?? emptyGroup();
       return { groupId, shared: group.shared, reviewed: group.reviewed, nextAt: group.nextAt,
         waiting: Boolean(group.waiting), quietUntil: Math.max(group.quietUntil ?? 0, settings.proactivePauseWhenIgnored ? proactiveQuietUntil(groupId) : 0),
+        discussionCode: videoDiscussionContext(groupId).code,
         lastSharedAt: group.lastSharedAt ?? null, lastCode: group.lastCode ?? null, lastTitle: group.lastTitle ?? null };
     }) };
 }
@@ -66,23 +68,32 @@ export function startVideoDiscovery({ sendAction, connected, pace, onShared = ()
         && (!settings.proactivePauseWhenIgnored || Date.now() >= Math.max(readState().groups[groupId]?.quietUntil ?? 0, proactiveQuietUntil(groupId)));
     };
     if (!allowed()) return;
+    const discussion = videoDiscussionContext(groupId);
+    if (discussion.code !== "DISCUSSION_READY") return;
     const previous = readState().groups[groupId] ?? emptyGroup();
+    if (previous.lastConversationKey === discussion.key) return;
+    update(groupId, { lastConversationKey: discussion.key, nextAt: nowAfter(30), retryAt: 0 });
     const candidates = feed.filter(item => !(previous.seen ?? []).includes(item.bvid) && !hasReceipt(groupId, item.bvid)
       && (!item.duration || item.duration <= initial.videoMaxMinutes * 60));
     if (!candidates.length) { update(groupId, { nextAt: nowAfter(300), lastCode: "NO_NEW_CANDIDATE" }); return; }
-    update(groupId, { nextAt: nowAfter(300), lastCode: "SELECTING" });
-    const apiKey = getLlmApiKey(), context = recentGroupContext(groupId);
+    update(groupId, { lastCode: "SELECTING" });
+    const apiKey = getLlmApiKey(), context = discussion.context;
     const chosen = await decideBilibiliDiscovery({ apiKey, settings: initial, groupId, candidates, context, allowed });
     if (!allowed()) return;
-    if (!chosen.index) { update(groupId, group => ({ nextAt: nowAfter(chosen.nextCheckSeconds), lastCode: "NOT_INTERESTED", seen: [...new Set([...(group.seen ?? []), ...candidates.map(item => item.bvid)])].slice(-256) })); return; }
+    if (!chosen.index) { update(groupId, { lastCode: "NO_TOPIC_MATCH" }); return; }
     const candidate = candidates[chosen.index - 1];
     update(groupId, group => ({ seen: [...new Set([...(group.seen ?? []), candidate.bvid])].slice(-256), lastCode: "READING" }));
     const video = await watchBilibiliCandidate(candidate, initial, allowed);
     if (!allowed()) return;
+    const currentDiscussion = videoDiscussionContext(groupId);
+    if (currentDiscussion.code !== "DISCUSSION_READY") { update(groupId, { lastCode: "TOPIC_CHANGED" }); return; }
+    update(groupId, { lastConversationKey: currentDiscussion.key });
     update(groupId, group => ({ reviewed: group.reviewed + 1, lastCode: "REVIEWING" }));
-    const decision = await decideBilibiliDiscovery({ apiKey: getLlmApiKey(), settings: settingsForGroup(readLlmSettings(), groupId), groupId, video, context, allowed });
+    const decision = await decideBilibiliDiscovery({ apiKey: getLlmApiKey(), settings: settingsForGroup(readLlmSettings(), groupId), groupId, video, context: currentDiscussion.context, allowed });
     if (!allowed()) return;
-    update(groupId, { nextAt: nowAfter(decision.nextCheckSeconds), lastCode: decision.share ? "READY" : "NOT_SHARING" });
+    const stillRelevant = () => { const live = videoDiscussionContext(groupId); return allowed() && live.code === "DISCUSSION_READY" && live.key === currentDiscussion.key; };
+    if (!stillRelevant()) { update(groupId, { lastCode: "TOPIC_CHANGED" }); return; }
+    update(groupId, { nextAt: nowAfter(30), lastCode: decision.share ? "READY" : "NOT_SHARING" });
     if (!decision.share) return;
     const note = decision.note.replace(/https?:\/\/\S+/gu, "").trim();
     if (!note) return;
@@ -93,7 +104,7 @@ export function startVideoDiscovery({ sendAction, connected, pace, onShared = ()
     try { writeFileSync(file, JSON.stringify(receipt), { flag: "wx", mode: 0o600 }); }
     catch (error) { if (error.code === "EEXIST") return; throw error; }
     try {
-      const sent = await pace("send_msg", { message_type: "group", group_id: groupId, message: text, auto_escape: true }, sendAction, allowed);
+      const sent = await pace("send_msg", { message_type: "group", group_id: groupId, message: text, auto_escape: true }, sendAction, stillRelevant);
       if (sent?.cancelled) { receipt.state = "cancelled"; writeFileSync(file, JSON.stringify(receipt), { mode: 0o600 }); return; }
       if (!sent?.message_id) throw new Error("BILI_DELIVERY_UNCERTAIN");
       receipt.messageId = String(sent.message_id); receipt.state = "sent";
@@ -124,7 +135,11 @@ export function startVideoDiscovery({ sendAction, connected, pace, onShared = ()
     const state = readState(), now = Date.now();
     const groups = settings.videoDiscoveryGroupIds.filter(groupId => access.groupIds.includes(groupId)).filter(groupId => {
       const group = state.groups[groupId] ?? emptyGroup();
-      return now >= group.nextAt && (!settings.proactivePauseWhenIgnored || now >= Math.max(group.quietUntil ?? 0, proactiveQuietUntil(groupId)));
+      const discussion = videoDiscussionContext(groupId);
+      return discussion.code === "DISCUSSION_READY" && discussion.key !== group.lastConversationKey
+        && now >= (group.retryAt ?? 0)
+        && now >= (group.lastConversationKey ? group.nextAt : 0)
+        && (!settings.proactivePauseWhenIgnored || now >= Math.max(group.quietUntil ?? 0, proactiveQuietUntil(groupId)));
     });
     if (!groups.length) return;
     active = true;
@@ -134,10 +149,10 @@ export function startVideoDiscovery({ sendAction, connected, pace, onShared = ()
       for (const groupId of groups) {
         if (stopped) break;
         try { await examine(groupId, feed); }
-        catch (error) { update(groupId, { lastCode: /^[A-Z_]{1,60}$/u.test(error.message ?? "") ? error.message : "VIDEO_OR_MODEL_UNAVAILABLE", nextAt: nowAfter(300) }); }
+        catch (error) { update(groupId, { lastCode: /^[A-Z_]{1,60}$/u.test(error.message ?? "") ? error.message : "VIDEO_OR_MODEL_UNAVAILABLE", nextAt: nowAfter(300), retryAt: nowAfter(300) }); }
       }
     } catch (error) {
-      for (const groupId of groups) update(groupId, { lastCode: /^[A-Z_]{1,60}$/u.test(error.message ?? "") ? error.message : "BROWSER_UNAVAILABLE", nextAt: nowAfter(300) });
+      for (const groupId of groups) update(groupId, { lastCode: /^[A-Z_]{1,60}$/u.test(error.message ?? "") ? error.message : "BROWSER_UNAVAILABLE", nextAt: nowAfter(300), retryAt: nowAfter(300) });
     } finally { active = false; }
   }
   const timer = setInterval(() => { void tick().catch(() => {}); }, 15000); timer.unref?.();

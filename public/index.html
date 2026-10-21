@@ -271,7 +271,7 @@
               <div class="settings-field"><label>后台重试与自动补发</label><button type="button" id="refresh-reply-recovery" class="button button-quiet">查看补发状态</button><p class="field-hint">临时服务故障会登记原消息，后台最多处理3轮，约1分钟、3分钟、10分钟后补试；成功后引用原请求补发一次。重启后继续，权限撤销或人设/成员印象被清除后取消。重试过程不发进度消息，发送状态不确定时不盲目重复。</p><pre id="reply-recovery-status" class="diagnostic-output" role="status">点击查看，不会重试或发送消息。</pre></div>
               <div class="settings-field settings-toggle">
                 <label for="video-discovery-enabled"><input id="video-discovery-enabled" type="checkbox">让肥鱼自主浏览B站，分享有趣的视频</label>
-                <p class="field-hint">使用本机 Edge 的B站首页推荐；先挑视频，再读取实际字幕、语音或关键画面，确实觉得有趣才向所选群发送原链接和一两句感受。各群按本群人设和话题分别判断。不设每小时或每天的分享条数配额，浏览节奏由模型决定；重复视频去重，沿用消息至少间隔10秒。开启“无人回应时暂缓”时，分享后无人回应会安静约65分钟，群友@bot或引用回应可提前恢复。页面与内容读取失败时安静跳过，不凭标题编观后感。保存模型设置后生效。</p>
+                <p class="field-hint">结合正在聊的话题自然分享：群里最近3分钟有讨论、发言暂歇约12秒后才选片；视频必须直接关联当前讨论，读取实际字幕、语音或关键画面后再核对最新话题。接不上、话题已转走或正在等bot回答就不发，不为推荐硬插话。同一段讨论不会反复评估，无人聊天时不刷推荐。各群独立判断，附原链接和一两句接话感受。不设每小时或每天的分享配额，重复视频去重，发送至少间隔10秒。沿用无人回应暂缓约65分钟、@bot或引用回应可提前恢复。读取失败安静跳过，不凭标题编观后感。保存模型设置后生效。</p>
               </div>
               <div class="settings-field"><label for="video-discovery-group-ids">允许主动分享视频的群</label><textarea id="video-discovery-group-ids" rows="2" maxlength="4300" placeholder="每行一个已授权群号"></textarea><p class="field-hint">只有同时在“群与权限”白名单内的群会生效。关闭B站视频理解也会暂停自动分享。需保持 Edge 和本机服务运行；不替账号点赞、投币、关注或发布B站动态，不读取或复制浏览器 Cookie。</p></div>
               <div class="settings-field"><label>自主浏览与分享状态</label><button type="button" id="refresh-video-discovery" class="button button-quiet">查看视频浏览状态</button><pre id="video-discovery-status" class="diagnostic-output" role="status">点击查看，不会强制推荐或发送测试消息。</pre></div>
