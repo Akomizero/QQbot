@@ -15,6 +15,7 @@ import { parseStickerRejection } from "./sticker-preferences.js";
 import { memberImpressionContext, memberLearningStamp } from "./member-impressions.js";
 import { getSearchApiKey } from "./config.js";
 import { searchLocalGroupHistory } from "./conversation-context.js";
+import { commonMemoryInstruction } from "./memory-maintenance.js";
 
 const timeoutMs = 60_000;
 const maxConcurrentRequests = 2;
@@ -567,7 +568,7 @@ async function getLlmReplyInternal({
 
     let knowledgeResults = [];
     if (settings.knowledgeEnabled !== false) {
-      try { knowledgeResults = searchKnowledge(userMessage, { groupId }); } catch {
+      try { knowledgeResults = searchKnowledge(userMessage, { groupId, track: true }); } catch {
         // A damaged store is ignored rather than exposing file details to chat.
       }
     }
@@ -591,6 +592,9 @@ async function getLlmReplyInternal({
     if (targetInstruction) messages.push({ role: "system", content: targetInstruction });
     const memoryInstruction = buildMemoryInstruction(settings);
     if (memoryInstruction) messages.push({ role: "system", content: memoryInstruction });
+    if (groupId && settings.knowledgeEnabled !== false) {
+      try { const common = commonMemoryInstruction(groupId, knowledgeResults.map(entry => entry.id)); if (common) messages.push({ role: "system", content: common }); } catch {}
+    }
     if (settings.memberImpressionsEnabled !== false) {
       try { const impression = memberImpressionContext(groupId, senderQQId, userMessage); if (impression) messages.push({ role: "system", content: impression }); } catch {}
     }
@@ -675,7 +679,7 @@ async function getLlmReplyInternal({
             else {
               const args = parseToolArguments(toolCall.function?.arguments), query = String(args?.query ?? "").slice(0, 300);
               try { toolContent = JSON.stringify(toolName === "search_group_history" ? searchLocalGroupHistory(groupId, query, messageContext?.messageId)
-                : { source: "本地梗词知识库", retrieval: "local-only", results: searchKnowledge(query, { groupId }) }); }
+                : { source: "本地梗词知识库", retrieval: "local-only", results: searchKnowledge(query, { groupId, track: true }) }); }
               catch { toolContent = "本次没有读到本地资料，不能编造记录。"; }
             }
           }

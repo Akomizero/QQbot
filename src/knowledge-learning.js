@@ -6,6 +6,7 @@ import { fetchModel } from "./model-transport.js";
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isSafeMemberContent, memberLearningStamp, mergeMemberImpressions } from "./member-impressions.js";
+import { learningMemoryContext } from "./memory-maintenance.js";
 
 const buffers = new Map();
 const intervalMs = 5 * 60_000;
@@ -95,11 +96,11 @@ export function validateMemberCandidates(value, batch) {
     results.push({ userId: first.userId, generation: first.memberGeneration, name: first.memberName, kind: item.kind, topic: canonicalTopic,
       content: selfExcerpt ? `自述：${selfExcerpt.slice(0, 230)}` : `对话观察：与bot聊到「${canonicalTopic}」相关话题。`, tags: item.tags,
       basis: selfStatement ? "self" : "dialogue", evidenceRefs, explicitRemember: explicitRemember && Boolean(selfExcerpt),
-      explicitCorrection: selfStatement && Boolean(selfExcerpt) && evidence.some(message => /现在|最近|已经|不再|不玩|不看|不喜欢|讨厌|改为|改成/u.test(message.text)) });
+      explicitCorrection: selfStatement && Boolean(selfExcerpt) && evidence.some(message => /现在|最近|已经|不再|不玩|不看|不喜欢|讨厌|改为|改成|以后.{0,8}(?:叫我|称呼我)/u.test(message.text)) });
   }
   return results;
 }
-export async function extractLearningBatch({ apiKey, settings, batch }) {
+export async function extractLearningBatch({ apiKey, settings, batch, memoryContext = null }) {
   const collectMembers = settings.memberImpressionsEnabled !== false && settings.memberImpressionsLearningEnabled !== false;
   const names = new Map();
   const messages = batch.map((message, index) => {
@@ -117,6 +118,7 @@ export async function extractLearningBatch({ apiKey, settings, batch }) {
       { role: "system", content: collectMembers
         ? '仅输出JSON对象 {"knowledge": [群知识], "impressions": [成员印象]}。没有相应资料时用空数组。个人偏好、称呼与互动习惯放入impressions，不重复放进knowledge。每条成员印象为 {speaker: 输入中的成员编号, kind: preference/interest/interaction/nickname, topic: 稳定的原文话题关键词, tags: [原文中的2至20字关键词], content: 一句非敏感印象, evidenceIds: [支持的消息id]}，最多6条。只能引用memberMemoryEligible为true的消息，且一条印象的证据必须全部属于同一speaker。不要求说“记住”或“我喜欢”：从与bot的直接对话中提取反复讨论的娱乐话题、表达方式和互动习惯，单次有内容的讨论也可作为初步观察；应用会累积证据后再决定是否使用。普通问题只能形成interest或interaction观察，问过某游戏不等于喜欢它，不能根据问题推断个人经历或性格。preference/nickname必须有明确自述。明确改变偏好时沿用同一话题关键词，不制造重复档案。不要把第三人称、引用、转述记给发言者，不推断敏感属性、真人负面性格或现实关系。'
         : "仅输出群知识JSON数组，没有资料时输出[]。" },
+      ...(memoryContext ? [{ role: "system", content: "下列是本群已有词条和本批成员主题的命名索引，仅帮助同义词沿用稳定的title/topic/kind；不构成本次新证据，不计入evidenceIds，不可把旧记录补写成群友新说的话。只有确实同一主题才沿用，不合并同名不同义。不得根据索引推断其他成员。\n" + JSON.stringify(memoryContext) }] : []),
       { role: "user", content: JSON.stringify(messages) },
     ] }),
     redirect: "error",
@@ -187,7 +189,10 @@ async function evaluate(groupId, forced = false) {
     if (knowledgeAttempt) state.count += 1;
     if (memberAttempt) state.memberCount = (state.memberCount ?? 0) + 1;
     batch = state.messages.splice(0, 30);
-    const candidates = await extractLearningBatch({ apiKey, settings, batch: knowledgeAttempt ? batch : batch.filter(message => message.memberEligible) });
+    const selectedBatch = knowledgeAttempt ? batch : batch.filter(message => message.memberEligible);
+    let memoryContext = null;
+    try { memoryContext = learningMemoryContext(groupId, selectedBatch, { knowledge: knowledgeAttempt, members: hasMembers }); } catch {}
+    const candidates = await extractLearningBatch({ apiKey, settings, batch: selectedBatch, memoryContext });
     // Recheck switches and authorization after the model request before writing.
     const latest = readLlmSettings();
     if (buffers.get(groupId) === state && readAccessControl().groupIds.includes(groupId)) {

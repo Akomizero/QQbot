@@ -434,8 +434,9 @@
             <div class="settings-field settings-toggle"><label for="knowledge-learning-enabled"><input id="knowledge-learning-enabled" type="checkbox">从群友聊天中积累知识</label><p class="field-hint">群友解释网梗、群内称呼或互动背景，单人也可形成待确认候选；个人喜好和日常对话观察显示在「成员印象」。普通聊天合并提炼，每群至少间隔5分钟，不再设每日12次上限。明确教学消息优先保留；断连会重试有效短期缓冲，不保存完整原始聊天记录。</p></div>
           </div>
           <p id="knowledge-learning-status" class="field-hint" role="status">正在读取积累状态…</p>
+          <details class="settings-group"><summary>记忆维护与常用索引</summary><p class="field-hint">常用词先给简短背景，需要细节时再检索完整知识库。每小时在本机整理一次：合并完全重复的自动条目，长期未获支持的候选归档保留；已确认知识不会因冷门被删掉。这里的召回次数只代表检索提供过材料，不代表模型一定采用。</p><p id="knowledge-maintenance-status" class="field-hint" role="status">正在读取…</p><button id="maintain-knowledge-memory" type="button" class="button button-quiet">整理本群记忆</button></details>
           <button type="button" class="button button-quiet" id="show-knowledge-candidates">查看待确认知识</button>
-          <div class="knowledge-filters"><input id="knowledge-filter" placeholder="找标题、关键词或正文…" aria-label="筛选知识"><select id="knowledge-origin-filter" aria-label="知识来源"><option value="all">全部知识</option><option value="manual">手动添加</option><option value="learned">群聊已学会</option><option value="candidate">待确认</option><option value="rejected">已拒绝</option></select></div>
+          <div class="knowledge-filters"><input id="knowledge-filter" placeholder="找标题、关键词或正文…" aria-label="筛选知识"><select id="knowledge-origin-filter" aria-label="知识来源"><option value="all">当前知识</option><option value="manual">手动添加</option><option value="learned">群聊已学会</option><option value="candidate">待确认</option><option value="rejected">已拒绝</option><option value="archived">已归档（可恢复）</option></select></div>
           <p class="field-hint" id="knowledge-count" role="status">正在读取…</p>
           <div class="knowledge-grid">
             <div id="knowledge-list" class="command-list"></div>
@@ -485,18 +486,19 @@
           <div class="settings-heading"><div><p class="eyebrow">MEMBER IMPRESSIONS</p><h2>成员长期印象</h2><p>按群号＋QQ号对应成员，昵称仅辅助显示，可留空。改昵称不会丢失或新建印象，同名不同QQ号不会合并；同一QQ在不同群的印象各自独立。</p></div><button class="button button-quiet" id="refresh-members" type="button">刷新</button></div>
           <div class="knowledge-switches">
             <div class="settings-field settings-toggle"><label for="member-impressions-enabled"><input id="member-impressions-enabled" type="checkbox" checked>在相关对话中使用本群成员印象</label></div>
-            <div class="settings-field settings-toggle"><label for="member-impressions-learning-enabled"><input id="member-impressions-learning-enabled" type="checkbox" checked>从与AI的日常对话中逐步形成印象</label><p class="field-hint">不用说“记住”：话题和互动先成为初步观察，多次独立对话支持后自动启用；单次提问不等于喜欢某事。成员积累不设每日次数额度，合并发言并至少间隔5分钟整理，可与知识提炼合用一次请求。明确的新偏好可修正自动印象；初步观察14天未获支持会清理，已形成的对话观察60天未获支持会淡出、120天清理。管理员确认、拒绝和暂停会保留。</p></div>
+            <div class="settings-field settings-toggle"><label for="member-impressions-learning-enabled"><input id="member-impressions-learning-enabled" type="checkbox" checked>从与AI的日常对话中逐步形成印象</label><p class="field-hint">不用说“记住”：话题和互动先成为初步观察，多次独立对话支持后自动启用；单次提问不等于喜欢某事。成员积累不设每日次数额度，合并发言并至少间隔5分钟整理，可与知识提炼合用一次请求。明确的新偏好可修正自动印象；初步观察14天未获支持会归档，已形成的对话观察60天未获支持会淡出、120天归档。管理员确认、拒绝和暂停会保留。</p></div>
           </div>
           <div class="member-toolbar"><div class="settings-field"><label for="member-group">所属群</label><select id="member-group"></select></div><input id="member-filter" aria-label="搜索成员昵称或QQ号" placeholder="搜索昵称或QQ号"><button class="button button-quiet" id="extract-member-impressions" type="button">提炼当前缓冲</button><button class="button button-primary" id="add-member" type="button">添加成员</button></div>
           <p id="member-learning-status" class="field-hint" aria-live="polite">正在读取本群积累状态。</p><p id="member-count" class="field-hint"></p>
+          <details class="settings-group"><summary>记忆维护</summary><p class="field-hint">完全重复的自动印象合并证据；未获支持的初步观察14天后归档，对话观察60天未获支持淡出、120天归档。归档保留内容，可进入成员编辑后恢复。管理员确认、拒绝与暂停积累的记录不自动覆盖。</p><p id="member-maintenance-status" class="field-hint" role="status">正在读取…</p><button id="maintain-member-memory" type="button" class="button button-quiet">整理本群记忆</button></details>
           <div class="member-layout"><div id="member-list" class="command-list"></div>
             <form id="member-form" class="knowledge-editor" hidden>
               <h3 id="member-editor-title">成员印象</h3>
               <div class="settings-field"><label for="member-user-id">成员QQ号</label><input id="member-user-id" inputmode="numeric" pattern="[0-9]{1,32}" maxlength="32" required></div>
               <div class="settings-field"><label for="member-name">昵称 / 显示名（可选）</label><input id="member-name" maxlength="40" placeholder="仅方便查找，不参与身份匹配"><p class="field-hint">改名或清空此栏不影响已有印象；稳定标识是本群的成员QQ号。</p></div>
               <div class="settings-field settings-toggle"><label><input id="member-profile-enabled" type="checkbox" checked>使用此成员的已确认印象</label><label><input id="member-learning-enabled" type="checkbox" checked>继续为此成员积累</label></div>
-              <div id="member-facts"></div><button class="button button-quiet" id="add-member-fact" type="button">添加一条印象</button>
-              <p class="field-hint">只记录非敏感的兴趣、娱乐偏好、称呼与互动习惯。拒绝/删除的主题不会自动重新加入；确认修正候选后停用旧版本。每人最多20条。</p>
+              <label class="field-hint"><input id="member-show-archives" type="checkbox">显示归档印象（可恢复）</label><div id="member-facts"></div><button class="button button-quiet" id="add-member-fact" type="button">添加一条印象</button>
+              <p class="field-hint">只记录非敏感的兴趣、娱乐偏好、称呼与互动习惯。拒绝/删除的主题不会自动重新加入；确认修正候选后停用旧版本。每人最多20条当前印象，归档另存。</p>
               <div class="form-error" id="member-error" role="alert" hidden></div>
               <div class="form-actions"><button class="button button-primary" type="submit">保存成员</button><button class="button button-quiet" id="cancel-member" type="button">关闭</button><button class="button button-quiet" id="forget-member" type="button">清除并暂停积累</button></div>
             </form>

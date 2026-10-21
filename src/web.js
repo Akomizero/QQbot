@@ -28,6 +28,7 @@ import { readStickerPreferences, saveStickerPreferences } from "./sticker-prefer
 import { readMemberImpressions, saveMemberImpression, forgetMemberImpression } from "./member-impressions.js";
 import { readVisualMemories, editVisualMemory } from "./visual-memory-store.js";
 import { visualLearningStatus } from "./visual-learning.js";
+import { memoryMaintenanceSummary, maintainGroupMemory } from "./memory-maintenance.js";
 
 const publicRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const assets = new Map([
@@ -281,11 +282,11 @@ export async function startManagementServer({
           if (!groupId) throw new Error("请选择成员印象所属群。");
           const impressions = readMemberImpressions(groupId);
           const lastMemberSavedAt = Math.max(0, ...impressions.members.flatMap(member => member.facts.map(fact => fact.updatedAt ?? 0)));
-          sendJson(response, 200, { groups, ...impressions, learning: {
+          sendJson(response, 200, { groups, ...impressions, maintenance: memoryMaintenanceSummary(groupId), learning: {
             ...(getKnowledgeLearningStatus().groups.find(state => state.groupId === groupId) ?? {}), lastMemberSavedAt: lastMemberSavedAt || null,
           } }); return;
         }
-        const body = await readJsonBody(request), groupId = knowledgeScope(body?.groupId);
+        const body = await readJsonBody(request, 2 * 1024 * 1024), groupId = knowledgeScope(body?.groupId);
         if (!groupId) throw new Error("成员印象仅用于群聊，请选择一个群。");
         if (request.method === "POST" && url.pathname.endsWith("/learn")) {
           const settings = readLlmSettings();
@@ -465,12 +466,25 @@ export async function startManagementServer({
       return;
     }
 
+    if (url.pathname === "/api/memory-maintenance") {
+      try {
+        if (!["GET", "POST"].includes(request.method)) { sendJson(response, 405, { error: "记忆维护支持GET和POST。" }); return; }
+        const body = request.method === "POST" ? await readJsonBody(request) : null;
+        const groupId = knowledgeScope(request.method === "GET" ? url.searchParams.get("groupId") : body?.groupId);
+        if (!groupId) throw new Error("请选择一个群，私聊资料不参与群记忆维护。");
+        if (request.method === "POST" && typeof body?.revision !== "string") throw new Error("缺少记忆修订号，请刷新后重试。");
+        const maintenance = request.method === "GET" ? memoryMaintenanceSummary(groupId) : maintainGroupMemory(groupId, body.revision);
+        sendJson(response, 200, { maintenance, message: "本群记忆已整理；重复和长期未获支持的自动条目保留在归档，不调用模型、不发送群消息。" });
+      } catch (error) { sendJson(response, error.statusCode ?? 400, { error: error.code ? "无法维护本群记忆，请检查本机资料文件。" : error.message }); }
+      return;
+    }
+
     if (url.pathname === "/api/knowledge") {
       if (request.method === "GET") {
         try {
           const groupId = knowledgeScope(url.searchParams.has("groupId") ? url.searchParams.get("groupId") : undefined, { useDefault: true });
           const entries = readScopedKnowledge(groupId);
-          sendJson(response, 200, { groupId, groups: readAccessControl().groupIds, entries, revision: knowledgeRevision(entries),
+          sendJson(response, 200, { groupId, groups: readAccessControl().groupIds, entries, revision: knowledgeRevision(entries), maintenance: groupId ? memoryMaintenanceSummary(groupId) : null,
             learning: { groups: getKnowledgeLearningStatus().groups.filter((state) => state.groupId === groupId) }, oneBotConnected: Boolean(getOneBotStatus?.().connected) });
         }
         catch (error) { sendJson(response, error.statusCode ?? 500, { error: error.statusCode ? error.message : "无法读取本地知识库，请检查本机知识库文件。" }); }

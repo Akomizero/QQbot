@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "no
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { memoryIndex, recordMemoryRecall, recallScore } from "./memory-index.js";
 
 const storePath = fileURLToPath(new URL("../data/knowledge-base.json", import.meta.url));
 const maxStoreBytes = 1024 * 1024;
@@ -34,7 +35,10 @@ export function normalizeKnowledgeEntries(entries) {
     const relatedStickerIds = [...new Set(Array.isArray(entry.relatedStickerIds) ? entry.relatedStickerIds : [])].filter(id => /^[a-f\d-]{36}$/u.test(id)).slice(0, 4);
     const supersedesId = typeof entry.supersedesId === "string" && /^[a-zA-Z0-9_-]{1,100}$/u.test(entry.supersedesId) ? entry.supersedesId : null;
     const requiresReview = entry.requiresReview === true;
-    return { id, title: title.trim(), tags: [...new Set(tags.map((tag) => tag.trim()))], content: content.trim(), enabled: reviewStatus === "learned" ? enabled : false, groupId, origin, learnedAt, updatedAt, evidenceCount, reviewStatus, reviewDecision, evidenceRefs, relatedStickerIds, supersedesId, requiresReview };
+    const archivedAt = Number.isFinite(entry.archivedAt) && entry.archivedAt > 0 ? entry.archivedAt : null;
+    const archiveReason = ["duplicate", "unsupported"].includes(entry.archiveReason) ? entry.archiveReason : null;
+    const mergedInto = typeof entry.mergedInto === "string" && /^[a-zA-Z0-9_-]{1,100}$/u.test(entry.mergedInto) ? entry.mergedInto : null;
+    return { id, title: title.trim(), tags: [...new Set(tags.map((tag) => tag.trim()))], content: content.trim(), enabled: reviewStatus === "learned" && !archivedAt ? enabled : false, groupId, origin, learnedAt, updatedAt, evidenceCount, reviewStatus, reviewDecision, evidenceRefs, relatedStickerIds, supersedesId, requiresReview, archivedAt, archiveReason, mergedInto };
   });
   if (Buffer.byteLength(JSON.stringify(result), "utf8") > maxStoreBytes - 100) throw new Error("知识库总量超过 1 MB，请精简条目。");
   return result;
@@ -103,7 +107,7 @@ export function mergeLearnedKnowledge(groupId, candidates, now = Date.now()) {
     const existing = entries.find((entry) => entry.id === id);
     if (entries.some((entry) => entry.origin === "manual" && entry.groupId === groupId && entry.title.normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/\s/gu, "") === titleKey)) continue;
     if (existing) {
-      if (existing.reviewDecision === "rejected" || existing.reviewStatus === "rejected") continue;
+      if (existing.archivedAt || existing.reviewDecision === "rejected" || existing.reviewStatus === "rejected") continue;
       // Preserve an administrator's disabled/edit choices; only promote a pending candidate.
       const oldRefs = existing.evidenceRefs ?? [];
       const fresh = (candidate.evidenceRefs ?? []).filter(ref => !oldRefs.some(old => old.hash === ref.hash));
@@ -128,6 +132,38 @@ export function mergeLearnedKnowledge(groupId, candidates, now = Date.now()) {
   }
   if (changed) writeKnowledgeEntries(entries);
   return changed;
+}
+
+const memoryKey = value => String(value).normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/\s+/gu, "");
+export function maintainKnowledgeMemory(groupId, now = Date.now()) {
+  const entries = readKnowledgeEntries(), seen = new Map();
+  const result = { merged: 0, archived: 0 };
+  for (const entry of entries.filter(item => item.groupId === groupId && item.origin === "group" && !item.archivedAt && !item.reviewDecision && item.reviewStatus !== "rejected")) {
+    const signature = JSON.stringify([memoryKey(entry.title), entry.content.normalize("NFKC").replace(/\s+/gu, " ").trim(), entry.reviewStatus, entry.enabled, entry.requiresReview, entry.supersedesId]);
+    const previous = seen.get(signature);
+    if (previous) {
+      previous.evidenceRefs = [...new Map([...previous.evidenceRefs, ...entry.evidenceRefs].map(ref => [ref.hash, ref])).values()].sort((a, b) => a.at - b.at).slice(-20);
+      previous.evidenceCount = Math.max(previous.evidenceCount, entry.evidenceCount, previous.evidenceRefs.length);
+      previous.tags = [...new Set([...previous.tags, ...entry.tags])].slice(0, 20);
+      previous.relatedStickerIds = [...new Set([...previous.relatedStickerIds, ...entry.relatedStickerIds])].slice(0, 4);
+      previous.updatedAt = Math.max(previous.updatedAt ?? 0, entry.updatedAt ?? 0) || null;
+      Object.assign(entry, { enabled: false, archivedAt: now, archiveReason: "duplicate", mergedInto: previous.id }); result.merged++;
+    } else if (entry.reviewStatus === "candidate" && now - (entry.evidenceRefs.at(-1)?.at ?? entry.updatedAt ?? entry.learnedAt ?? now) > 30 * 86400_000) {
+      Object.assign(entry, { enabled: false, archivedAt: now, archiveReason: "unsupported" }); result.archived++;
+    } else seen.set(signature, entry);
+  }
+  if (result.merged || result.archived) writeKnowledgeEntries(entries);
+  return result;
+}
+export function commonKnowledge(groupId, now = Date.now()) {
+  if (typeof groupId !== "string" || !/^\d{1,32}$/u.test(groupId)) return [];
+  const index = memoryIndex(groupId);
+  return readScopedKnowledge(groupId).filter(entry => entry.enabled && !entry.archivedAt && entry.reviewStatus === "learned")
+    .map(entry => ({ entry, score: recallScore(index.recalls[`knowledge:${entry.id}`], now) }))
+    .filter(({ score, entry }) => score > 0 && index.recalls[`knowledge:${entry.id}`].count >= 2
+      || entry.origin === "group" && entry.evidenceCount >= 2 && now - (entry.updatedAt ?? entry.learnedAt ?? 0) < 30 * 86400_000)
+    .sort((a, b) => b.score - a.score || (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0)).slice(0, 5)
+    .map(({ entry }) => ({ id: entry.id, title: entry.title, tags: entry.tags.slice(0, 6), excerpt: entry.content.slice(0, 180) }));
 }
 
 function tokens(text) {
@@ -188,7 +224,7 @@ function rankChunks(chunks, query, limit) {
 }
 
 // The bot reads only this curated store. No filesystem paths are accepted from chat.
-export function searchKnowledge(query, { limit = 3, entries = null, groupId = null } = {}) {
+export function searchKnowledge(query, { limit = 3, entries = null, groupId = null, track = false } = {}) {
   const boundedLimit = Math.min(5, Math.max(1, Math.trunc(limit) || 3));
   if (groupId !== null && (typeof groupId !== "string" || !/^\d{1,32}$/u.test(groupId))) return [];
   const inScope = (entry) => entry.groupId === groupId;
@@ -199,5 +235,7 @@ export function searchKnowledge(query, { limit = 3, entries = null, groupId = nu
     cachedChunks = buildChunks(saved);
     cachedSource = source;
   }
-  return rankChunks(cachedChunks, query, boundedLimit);
+  const results = rankChunks(cachedChunks, query, boundedLimit);
+  if (track) recordMemoryRecall(groupId, "knowledge", results.map(item => item.id));
+  return results;
 }

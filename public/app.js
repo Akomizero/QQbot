@@ -851,6 +851,7 @@ let knowledgeRevisionValue = "";
 let knowledgeRefreshTimer;
 let selectedKnowledgeGroup;
 let knowledgeLoadSequence = 0;
+let knowledgeMaintenance = null;
 const knowledgeGroupSelect = document.querySelector("#knowledge-group");
 const knowledgeList = document.querySelector("#knowledge-list");
 const knowledgeForm = document.querySelector("#knowledge-form");
@@ -863,7 +864,7 @@ const knowledgeFields = {
 };
 
 function renderKnowledge() {
-  const candidateCount = knowledgeEntries.filter(entry => entry.reviewStatus === "candidate").length;
+  const candidateCount = knowledgeEntries.filter(entry => !entry.archivedAt && entry.reviewStatus === "candidate").length;
   document.querySelector("#knowledge-count").textContent = `${knowledgeEntries.length} 条知识，${knowledgeEntries.filter((entry) => entry.enabled).length} 条已启用，${candidateCount} 条待确认`;
   document.querySelector("#show-knowledge-candidates").textContent = `查看待确认知识（${candidateCount}）`;
   knowledgeList.replaceChildren();
@@ -876,7 +877,7 @@ function renderKnowledge() {
   const query = document.querySelector("#knowledge-filter").value.trim().toLocaleLowerCase("zh-CN");
   const origin = document.querySelector("#knowledge-origin-filter").value;
   const filtered = knowledgeEntries.filter((entry) => (!query || `${entry.title} ${entry.tags.join(" ")} ${entry.content}`.toLocaleLowerCase("zh-CN").includes(query))
-    && (origin === "all" || (origin === "manual" ? entry.origin !== "group" : entry.origin === "group" && (origin === "candidate" || origin === "rejected" ? entry.reviewStatus === origin : entry.reviewStatus === "learned"))));
+    && (origin === "archived" ? Boolean(entry.archivedAt) : !entry.archivedAt && (origin === "all" || (origin === "manual" ? entry.origin !== "group" : entry.origin === "group" && (origin === "candidate" || origin === "rejected" ? entry.reviewStatus === origin : entry.reviewStatus === "learned")))));
   for (const entry of filtered) {
     const card = document.createElement("div");
     card.className = "command-card";
@@ -885,7 +886,7 @@ function renderKnowledge() {
     edit.className = "command-card-main";
     const title = document.createElement("strong");
     title.className = "command-name";
-    title.textContent = `${entry.reviewStatus === "candidate" ? "[待确认] " : entry.reviewStatus === "rejected" ? "[已拒绝] " : entry.enabled ? "" : "[已停用] "}${entry.title}`;
+    title.textContent = `${entry.archivedAt ? "[已归档] " : entry.reviewStatus === "candidate" ? "[待确认] " : entry.reviewStatus === "rejected" ? "[已拒绝] " : entry.enabled ? "" : "[已停用] "}${entry.title}`;
     const tags = document.createElement("span");
     tags.className = "command-aliases";
     tags.textContent = entry.tags.join("、") || "未设置关键词";
@@ -919,7 +920,7 @@ function renderKnowledge() {
         } catch (error) { showToast(error.message, true); }
       }); card.append(related);
     }
-    if (entry.reviewStatus === "candidate") {
+    if (entry.reviewStatus === "candidate" && !entry.archivedAt) {
       const controls = document.createElement("div"); controls.className = "form-actions";
       for (const [label, accepted] of [["确认并启用", true], ["拒绝此候选", false]]) {
         const button = document.createElement("button"); button.type = "button"; button.className = "button button-quiet"; button.textContent = label;
@@ -937,6 +938,7 @@ function renderKnowledge() {
 }
 
 function knowledgeSourceLabel(entry) {
+  if (entry?.archivedAt) return `已归档 · ${entry.archiveReason === "duplicate" ? "完全重复，证据已合并" : "长期未获新支持"} · ${new Date(entry.archivedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })} · 可编辑并启用恢复`;
   if (entry?.origin !== "group") return entry?.groupId ? `手动添加 · 仅群 ${entry.groupId}` : selectedKnowledgeGroup ? `手动添加 · 仅群 ${selectedKnowledgeGroup}` : "手动添加 · 仅私聊资料";
   const date = entry.updatedAt ? new Date(entry.updatedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   return `${entry.reviewStatus === "candidate" ? "待确认" : entry.reviewStatus === "rejected" ? "已拒绝" : "群聊积累"} · 群 ${entry.groupId} · ${entry.evidenceCount ?? 0} 条支持 · ${date}`
@@ -971,6 +973,8 @@ async function loadKnowledge({ force = false } = {}) {
     knowledgeGroupSelect.value = data.groupId ?? "private";
     document.querySelector("#extract-knowledge").disabled = data.groupId === null;
     knowledgeEntries = data.entries;
+    knowledgeMaintenance = data.maintenance;
+    renderMemoryMaintenance("knowledge", data.maintenance);
     knowledgeRevisionValue = data.revision;
     const states = data.learning?.groups ?? [];
     const buffered = states.reduce((sum, state) => sum + state.bufferedMessages, 0);
@@ -1034,7 +1038,7 @@ knowledgeForm.addEventListener("submit", async (event) => {
     reviewStatus: knowledgeFields.enabled.checked ? "learned" : (knowledgeEntries.find((item) => item.id === knowledgeFields.id.value)?.reviewStatus ?? "learned"),
     reviewDecision: knowledgeFields.enabled.checked ? "approved" : (knowledgeEntries.find(item => item.id === knowledgeFields.id.value)?.reviewDecision ?? null),
   };
-  if (entry.enabled) entry.reviewStatus = "learned";
+  if (entry.enabled) { entry.reviewStatus = "learned"; entry.archivedAt = null; entry.archiveReason = null; entry.mergedInto = null; }
   const exists = knowledgeEntries.some((item) => item.id === entry.id);
   const entries = exists ? knowledgeEntries.map((item) => item.id === entry.id ? entry : item) : [...knowledgeEntries, entry];
   const button = knowledgeForm.querySelector('[type="submit"]');
@@ -1228,25 +1232,48 @@ let memberRefreshTimer;
 const memberForm = document.querySelector("#member-form");
 const memberGroupSelect = document.querySelector("#member-group");
 const memberKindNames = { preference: "娱乐偏好", interest: "兴趣话题", interaction: "互动习惯", nickname: "称呼偏好" };
+function renderMemoryMaintenance(prefix, data) {
+  const status = document.querySelector(`#${prefix}-maintenance-status`), button = document.querySelector(`#maintain-${prefix}-memory`);
+  button.disabled = !data;
+  if (!data) { status.textContent = "请选择已授权群；私聊资料单独维护。"; return; }
+  const last = data.last;
+  status.textContent = `知识：${data.knowledge.active}条启用、${data.knowledge.pending}条待确认、${data.knowledge.archived}条归档；成员印象：${data.members.active}条启用、${data.members.archived}条归档。常用词：${data.hot.map(item => `${item.title}（${item.recalls}次召回）`).join("、") || "尚未形成，正常聊天检索后逐步积累"}。`
+    + (last ? ` 最近整理：${new Date(last.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}，知识合并${last.knowledgeMerged}条、归档${last.knowledgeArchived}条，成员归档${last.memberArchived}条、淡出${last.memberFaded}条。` : " 等待首次本机整理。")
+    + (data.indexUnavailable ? " 召回索引暂不可读，原始记忆保留。" : "");
+}
+async function maintainMemory(prefix) {
+  const data = prefix === "knowledge" ? knowledgeMaintenance : memberData.maintenance;
+  if (!data) return;
+  if (data.groupId !== (prefix === "knowledge" ? selectedKnowledgeGroup : selectedMemberGroup)) { showToast("正在切换群，请等本群记忆读取完成。", true); return; }
+  if (!knowledgeForm.hidden || !memberForm.hidden) { showToast("请先保存或关闭正在编辑的记忆，再整理。", true); return; }
+  const button = document.querySelector(`#maintain-${prefix}-memory`); button.disabled = true;
+  try {
+    const result = await requestAdminApi("/api/memory-maintenance", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId: data.groupId, revision: data.revision }) });
+    showToast(result.message);
+  } catch (error) { showToast(error.message, true); }
+  finally { if (prefix === "knowledge") await loadKnowledge(); else await loadMemberImpressions(); }
+}
+document.querySelector("#maintain-knowledge-memory").addEventListener("click", () => void maintainMemory("knowledge"));
+document.querySelector("#maintain-member-memory").addEventListener("click", () => void maintainMemory("member"));
 function renderMemberList() {
   const list = document.querySelector("#member-list"), query = document.querySelector("#member-filter").value.trim().toLocaleLowerCase("zh-CN");
   list.replaceChildren();
-  const members = memberData.members ?? [], candidates = members.reduce((sum, profile) => sum + profile.facts.filter(fact => fact.reviewStatus === "candidate").length, 0);
+  const members = memberData.members ?? [], candidates = members.reduce((sum, profile) => sum + profile.facts.filter(fact => !fact.archivedAt && fact.reviewStatus === "candidate").length, 0);
   document.querySelector("#member-count").textContent = `${members.length} 位成员 · ${members.reduce((sum, profile) => sum + profile.facts.filter(fact => fact.enabled).length, 0)} 条可用印象 · ${candidates} 条初步观察/待确认`;
   for (const profile of members.filter(profile => !query || `${profile.name} ${profile.userId}`.toLocaleLowerCase("zh-CN").includes(query))) {
     const button = document.createElement("button"); button.type = "button"; button.className = "command-card";
     const name = document.createElement("strong"); name.textContent = `QQ ${profile.userId}`;
     const detail = document.createElement("span"); detail.className = "field-hint";
-    detail.textContent = `${profile.name ? "显示名：" + profile.name + " · " : ""}${profile.facts.filter(fact => fact.enabled).length} 条启用 · ${profile.facts.filter(fact => fact.reviewStatus === "candidate").length} 条待确认${profile.learningEnabled ? "" : " · 已暂停积累"}${profile.enabled ? "" : " · 已停用召回"}`;
+    detail.textContent = `${profile.name ? "显示名：" + profile.name + " · " : ""}${profile.facts.filter(fact => fact.enabled).length} 条启用 · ${profile.facts.filter(fact => !fact.archivedAt && fact.reviewStatus === "candidate").length} 条待确认${profile.learningEnabled ? "" : " · 已暂停积累"}${profile.enabled ? "" : " · 已停用召回"}`;
     button.append(name, detail);
-    for (const fact of [...profile.facts].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3)) {
+    for (const fact of [...profile.facts].filter(fact => !fact.archivedAt).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3)) {
       const preview = document.createElement("span"); preview.className = "field-hint";
       preview.textContent = `${fact.supersededAt ? "已修正" : fact.stale ? "已淡出" : fact.enabled ? "已形成" : fact.reviewStatus === "rejected" ? "已拒绝" : "初步观察"} · ${fact.content} · ${fact.evidenceRefs?.length ?? 0}条支持`;
       button.append(preview);
     }
-    if (profile.maintenance?.removed || profile.maintenance?.faded) {
+    if (profile.maintenance?.removed || profile.maintenance?.faded || profile.maintenance?.archived || profile.maintenance?.merged) {
       const maintenance = document.createElement("span"); maintenance.className = "field-hint";
-      maintenance.textContent = `自动维护：清理${profile.maintenance.removed ?? 0}条过期印象，淡出${profile.maintenance.faded ?? 0}条观察`; button.append(maintenance);
+      maintenance.textContent = `自动维护：合并${profile.maintenance.merged ?? 0}条重复、归档${profile.maintenance.archived ?? 0}条、淡出${profile.maintenance.faded ?? 0}条${profile.maintenance.removed ? `（旧版曾清理${profile.maintenance.removed}条）` : ""}`; button.append(maintenance);
     }
     button.addEventListener("click", () => editMember(profile)); list.append(button);
   }
@@ -1262,17 +1289,18 @@ function memberField(label, value, onChange, { area = false, maxLength = 240 } =
 function renderMemberFacts() {
   const container = document.querySelector("#member-facts"); container.replaceChildren();
   for (const fact of memberDraft.facts) {
+    if (fact.archivedAt && !document.querySelector("#member-show-archives").checked) continue;
     const card = document.createElement("article"); card.className = "member-fact";
     const status = document.createElement("p"); status.className = "field-hint";
     const evidence = fact.evidenceRefs ?? [];
-    status.textContent = `${fact.supersededAt ? "已被新偏好修正" : fact.stale ? "长期未获支持/已淡出" : { candidate: "初步观察/待确认", approved: fact.enabled ? "已形成/启用" : "已确认/停用", rejected: "已拒绝" }[fact.reviewStatus]} · ${fact.origin === "member" ? fact.basis === "dialogue" ? "日常对话逐步形成" : "成员自述" : "管理员维护"} · ${evidence.length} 条来源${evidence.length ? ` · 最近${new Date(evidence.at(-1).at).toLocaleString("zh-CN")}` : ""}${fact.supersedesId && !fact.enabled ? " · 修正候选，确认后停用旧版本" : ""}（修改需保存成员）`;
+    status.textContent = `${fact.archivedAt ? "已归档/可恢复" : fact.supersededAt ? "已被新偏好修正" : fact.stale ? "长期未获支持/已淡出" : { candidate: "初步观察/待确认", approved: fact.enabled ? "已形成/启用" : "已确认/停用", rejected: "已拒绝" }[fact.reviewStatus]} · ${fact.origin === "member" ? fact.basis === "dialogue" ? "日常对话逐步形成" : "成员自述" : "管理员维护"} · ${evidence.length} 条来源${evidence.length ? ` · 最近${new Date(evidence.at(-1).at).toLocaleString("zh-CN")}` : ""}${fact.supersedesId && !fact.enabled ? " · 修正候选，确认后停用旧版本" : ""}（修改需保存成员）`;
     const kind = document.createElement("select"); kind.setAttribute("aria-label", "印象类别");
     for (const [value, label] of Object.entries(memberKindNames)) kind.add(new Option(label, value)); kind.value = fact.kind; kind.addEventListener("change", () => { fact.kind = kind.value; });
     card.append(status, kind, memberField("主题", fact.topic, value => { fact.topic = value; }, { maxLength: 30 }),
       memberField("印象内容", fact.content, value => { fact.content = value; }, { area: true }),
       memberField("关键词（逗号或顿号分隔）", fact.tags.join("、"), value => { fact.tags = value.split(/[,，、]/u).map(tag => tag.trim()).filter(Boolean); }, { maxLength: 120 }));
     const actions = document.createElement("div"); actions.className = "form-actions";
-    for (const [caption, action] of [["设为已确认", () => { fact.reviewStatus = "approved"; fact.enabled = true; }], ["设为拒绝", () => { fact.reviewStatus = "rejected"; fact.enabled = false; }], ["停用", () => { fact.enabled = false; }], ["删除此条", () => { memberDraft.facts = memberDraft.facts.filter(item => item.id !== fact.id); }]]) {
+    for (const [caption, action] of [[fact.archivedAt ? "恢复并确认" : "设为已确认", () => { fact.reviewStatus = "approved"; fact.enabled = true; fact.archivedAt = null; fact.stale = false; }], ["设为拒绝", () => { fact.reviewStatus = "rejected"; fact.enabled = false; }], ["停用", () => { fact.enabled = false; }], ["删除此条", () => { memberDraft.facts = memberDraft.facts.filter(item => item.id !== fact.id); }]]) {
       const button = document.createElement("button"); button.type = "button"; button.className = "button button-quiet"; button.textContent = caption;
       button.addEventListener("click", () => { action(); renderMemberFacts(); showToast("修改待保存，请点击‘保存成员’。"); }); actions.append(button);
     }
@@ -1290,6 +1318,7 @@ function editMember(profile = null) {
   document.querySelector("#forget-member").hidden = !profile;
   document.querySelector("#member-error").hidden = true; memberForm.hidden = false; renderMemberFacts();
 }
+document.querySelector("#member-show-archives").addEventListener("change", () => { if (memberDraft) renderMemberFacts(); });
 async function loadMemberImpressions() {
   const sequence = ++memberLoadSequence;
   let data;
@@ -1301,6 +1330,7 @@ async function loadMemberImpressions() {
   }
   if (sequence !== memberLoadSequence) return;
   selectedMemberGroup = data.groupId ?? ""; memberData = data;
+  renderMemoryMaintenance("member", data.maintenance);
   memberGroupSelect.replaceChildren(...data.groups.map(id => new Option(`群 ${id}`, id))); memberGroupSelect.value = selectedMemberGroup;
   document.querySelector("#add-member").disabled = !selectedMemberGroup; document.querySelector("#extract-member-impressions").disabled = !selectedMemberGroup;
   const learning = data.learning;
@@ -1315,7 +1345,7 @@ document.querySelector("#refresh-members").addEventListener("click", () => { mem
 document.querySelector("#add-member").addEventListener("click", () => editMember());
 document.querySelector("#cancel-member").addEventListener("click", () => { memberForm.hidden = true; void loadMemberImpressions().catch(error => showToast(error.message, true)); });
 document.querySelector("#add-member-fact").addEventListener("click", () => {
-  if (memberDraft.facts.length >= 20) { showToast("每人最多20条，请先清理。", true); return; }
+  if (memberDraft.facts.filter(fact => !fact.archivedAt).length >= 20) { showToast("每人最多20条当前印象，归档另存。", true); return; }
   memberDraft.facts.push({ id: crypto.randomUUID(), kind: "preference", topic: "", content: "", tags: [], reviewStatus: "approved", enabled: true }); renderMemberFacts();
 });
 memberForm.addEventListener("submit", async event => {

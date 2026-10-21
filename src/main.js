@@ -28,6 +28,7 @@ import { enqueueReplyRecovery, startReplyRecovery, recoveryStillAllowed } from "
 import { parseSummaryIntent } from "./content-summary.js";
 import { startManagementServer } from "./web.js";
 import { observeKnowledgeMessage, clearKnowledgeLearning } from "./knowledge-learning.js";
+import { startMemoryMaintenance } from "./memory-maintenance.js";
 import { addLearnedSticker, approveStickerForSending, sendLlmResult, readSticker } from "./sticker-store.js";
 import { queueVisualCorrection } from "./visual-learning.js";
 import { isVisualCorrectionText } from "./visual-memory-store.js";
@@ -1049,10 +1050,12 @@ async function main() {
   let modelProxy;
   let replyRecovery;
   let videoDiscovery;
+  let memoryMaintenance;
   try {
     modelProxy = await startConfiguredModelProxy();
     if (controller.signal.aborted) return;
     await bridge.start();
+    memoryMaintenance = startMemoryMaintenance();
     replyRecovery = startReplyRecovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected,
       run: (job, allowed) => runRecoveredRequest(job, allowed, bridge.sendMessage, config), pace: paceOneBotMessage });
     videoDiscovery = startVideoDiscovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected, pace: paceOneBotMessage,
@@ -1096,6 +1099,7 @@ async function main() {
   } finally {
     replyRecovery?.stop();
     videoDiscovery?.stop();
+    memoryMaintenance?.stop();
     stopChatGptImageGeneration();
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
