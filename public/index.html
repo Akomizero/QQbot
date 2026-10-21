@@ -244,7 +244,7 @@
                   <option value="serper">Serper · Google 搜索结果</option>
                   <option value="tavily">Tavily Search</option>
                 </select>
-                <p class="field-hint">Serper 模式下所有网页搜索统一走 Google 结果接口，不自动换源；正文通过独立工具直接读取原网页。Tavily 模式保留 Exa / B站备用。群聊缓存和梗词库在本机检索，不发送给搜索服务；相关片段会交给当前模型组织回答。</p>
+                <p class="field-hint">Serper 模式下所有网页搜索统一走 Google 结果接口，不自动换源；连接超时、临时服务错误和限流最多自动补试2次，总时限40秒。密钥拒绝或账户额度不足不补试。正文通过独立工具直接读取原网页。Tavily 模式保留 Exa / B站备用。群聊缓存和梗词库在本机检索，不发送给搜索服务；相关片段会交给当前模型组织回答。</p>
               </div>
               <div class="settings-field">
                 <label for="serper-api-key">Serper API key（只写入，不回显）</label>
@@ -309,7 +309,7 @@
               </div>
               <div class="settings-field settings-toggle">
                 <label for="forward-reading-enabled"><input id="forward-reading-enabled" type="checkbox" checked>读取QQ合并转发消息</label>
-                <p class="field-hint">@bot并附转发、引用转发提问，或先发转发再于3分钟内说“看看刚才的聊天记录”。图片每批2张依次读取，直接使用转发节点提供的QQ图片链接；长文字分段读，完成后统一回复。开始时提示一次，之后至少间隔5分钟、最多再提示2次，连续3批失败会提前结束。最多200条节点、4层嵌套、100张图和12万字符，也可指定“第3张”。失败或截取会明确说明；GIF仅首帧，语音、视频和文件尚不自动解析。转发正文不自动写进长期记忆或表情库。所有授权群与白名单好友适用。</p>
+                <p class="field-hint">@bot并附转发、引用转发提问，或先发转发再于3分钟内说“看看刚才的聊天记录”。图片每批最多9张，直接读取QQ图片链接，超出每批大小限制时拆小批次；长文字分段读。读图过程安静处理，不发进度群消息，完成后统一回复。连续3批失败提前结束。最多200条节点、4层嵌套、100张图和12万字符，也可指定“第3张”。失败或截取会明确说明；GIF仅首帧，语音、视频和文件尚不自动解析。转发正文不自动写进长期记忆或表情库。所有授权群与白名单好友适用。</p>
               </div>
               <div class="settings-field settings-toggle">
                 <label for="video-understanding-enabled"><input id="video-understanding-enabled" type="checkbox">启用B站视频理解与观后感</label>

@@ -1,5 +1,5 @@
 // In-memory observations only. Raw images are released between batches.
-export async function prepareForwardReading(record, { describe, withImages, progress, allowed, userQuestion = "" }) {
+export async function prepareForwardReading(record, { describe, withImages, allowed, userQuestion = "" }) {
   const deadline = Date.now() + 30 * 60_000;
   const running = () => allowed() && Date.now() < deadline;
   const safe = value => {
@@ -9,20 +9,13 @@ export async function prepareForwardReading(record, { describe, withImages, prog
     }
     return text;
   };
-  let lastProgress = Date.now(), imageAttempts = 0, progressCount = 0, failedBatches = 0;
+  let failedBatches = 0;
   const originals = record.nodes;
   record.batchPrepared = true;
   record.visualReadings = [];
   record.failedImageNumbers = [];
   record.textBatches = [];
   const longText = JSON.stringify(originals).length > 18000;
-  await progress(`这条转发有${record.nodes.length}条记录、${record.imageCount}张图。我会${record.images.length ? "每次看2张图，" : ""}${longText ? "分段读文字，" : ""}读完再一起回复，可能需要几分钟。`).catch(() => {});
-  async function report() {
-    if (progressCount >= 2 || Date.now() - lastProgress < 5 * 60_000 || !allowed()) return;
-    lastProgress = Date.now();
-    progressCount++;
-    await progress(`还在读这条转发：已看懂${record.visualReadings.length}/${record.images.length}张图，已尝试${imageAttempts}张；其余还在处理，未读到的会在最后说明。`).catch(() => {});
-  }
   if (longText) {
     const chunks = []; let chunk = [], length = 0;
     for (let index = 0; index < originals.length; index++) {
@@ -42,7 +35,6 @@ export async function prepareForwardReading(record, { describe, withImages, prog
       const range = [nodes[0].originalNode, nodes.at(-1).originalNode];
       try { const result = await describe({ nodes, userQuestion, allowed: running }); record.textBatches.push({ range, summary: safe(result.summary), read: true }); }
       catch { record.textBatches.push({ range, summary: "本段阅读失败，不能据此推断内容", read: false }); }
-      await report();
     }
     record.nodes = record.textBatches.map(part => ({ speaker: "分段阅读记录", content: `原节点${part.range.join("至")}：${part.summary}` }));
     if (record.textBatches.length < chunks.length) record.notes.push("文字分段阅读因停止或总时限结束，没有处理全部段落");
@@ -61,21 +53,22 @@ export async function prepareForwardReading(record, { describe, withImages, prog
         const result = await describe({ images, nodes: relevant, userQuestion, allowed: running });
         record.visualReadings.push(...result.images.map(item => ({ number: item.number, summary: safe(item.summary) })));
       });
-    } catch {
+    } catch (error) {
       // Retry loading individually when a bad file or a pair size limit hid its neighbour.
-      if (!loaded && refs.length > 1) { for (const ref of refs) await readImages([ref]); return; }
+      if ((!loaded && refs.length > 1) || (error?.code === "FORWARD_BATCH_INVALID" && refs.length > 2)) {
+        const middle = Math.ceil(refs.length / 2);
+        await readImages(refs.slice(0, middle)); await readImages(refs.slice(middle)); return;
+      }
       const reason = loaded ? "图片已取得，但本批模型分析失败" : "未能取得图片文件";
       if (!record.notes.includes(reason)) record.notes.push(reason);
     }
-    imageAttempts += refs.length;
     for (const ref of refs) if (!record.visualReadings.some(item => item.number === ref.forwardedNumber)) record.failedImageNumbers.push(ref.forwardedNumber);
   }
-  for (let index = 0; index < record.images.length && running(); index += 2) {
+  for (let index = 0; index < record.images.length && running(); index += 9) {
     const previousRead = record.visualReadings.length;
-    await readImages(record.images.slice(index, index + 2));
+    await readImages(record.images.slice(index, index + 9));
     failedBatches = record.visualReadings.length > previousRead ? 0 : failedBatches + 1;
     if (failedBatches >= 3) { record.notes.push("连续3批图片未能取得有效内容，已提前停止，未继续让群友等待"); break; }
-    await report();
   }
   const readNumbers = new Set(record.visualReadings.map(item => item.number));
   record.failedImageNumbers = [...new Set(record.images.filter(ref => !readNumbers.has(ref.forwardedNumber)).map(ref => ref.forwardedNumber))];

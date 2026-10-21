@@ -1,3 +1,7 @@
+import { createModelConnectionPool } from "./model-connection-pool.js";
+import { recordModelDiagnostic, withModelOperation } from "./model-diagnostics.js";
+const serperConnections = createModelConnectionPool();
+export const closeSearchConnections = () => serperConnections.close();
 const endpoint = "https://api.tavily.com/search";
 const timeoutMs = 12_000;
 const maxResponseBytes = 512 * 1024;
@@ -8,6 +12,61 @@ const providerCooldowns = new Map();
 const resultCache = new Map();
 const cacheTtlMs = 5 * 60_000;
 
+const requestSerper = (apiKey, body) => withModelOperation(() => requestSerperInternal(apiKey, body));
+async function requestSerperInternal(apiKey, body) {
+  const target = "https://google.serper.dev/search", deadline = AbortSignal.timeout(40_000);
+  let finalError, attempts = 0;
+  for (let attempt = 1; attempt <= 3 && !deadline.aborted; attempt++) {
+    attempts = attempt;
+    const signal = AbortSignal.any([deadline, AbortSignal.timeout(timeoutMs)]);
+    let entry, response, retryable = false, delay = attempt === 1 ? 1000 : 3000;
+    const started = Date.now();
+    try {
+      ({ entry } = await serperConnections.acquire(target, { attempt, signal }));
+      recordModelDiagnostic("tools", { code: "SERPER_REQUEST", phase: "serper_search", attempt, route: entry.route });
+      response = await fetch(target, { method: "POST", headers: { "X-API-KEY": apiKey, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify(body), signal, redirect: "error", ...(entry.dispatcher ? { dispatcher: entry.dispatcher } : {}) });
+      if (!response.ok) {
+        retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
+        let exhausted = response.status === 402;
+        if (response.status === 429 || response.status === 403) {
+          try { exhausted ||= /(?:not enough|insufficient|exhausted).{0,30}credits|credits.{0,30}(?:exhausted|insufficient)|账户额度不足|余额不足/iu.test(await readTextLimited(response)); } catch {}
+          if (exhausted) retryable = false;
+        }
+        const after = Number(response.headers.get("retry-after"));
+        if (Number.isFinite(after) && after > 0) delay = Math.min(6000, Math.max(delay, after * 1000));
+        const message = exhausted ? "Serper 账户额度不足，请管理员检查账户。"
+          : [401, 403].includes(response.status) ? "Serper 拒绝了请求，请管理员检查密钥和账户额度。"
+          : response.status === 429 ? "Serper 达到请求或额度限制，请稍后再试并检查账户额度。" : "Serper 搜索服务暂时出错，请稍后再试。";
+        throw new SearchRequestError(message, { code: `SERPER_HTTP_${response.status}` });
+      }
+      const payload = await readJsonLimited(response);
+      recordModelDiagnostic("tools", { code: "SERPER_SUCCESS", phase: "serper_search", attempt, status: response.status, elapsedMs: Date.now()-started });
+      return payload;
+    } catch (error) {
+      if (!(error instanceof SearchRequestError)) {
+        retryable = true;
+        finalError = new SearchRequestError("暂时无法连接 Serper 搜索服务，请稍后再试。", { code: signal.aborted ? "SERPER_TIMEOUT" : "SERPER_CONNECTION" });
+      } else {
+        finalError = error;
+        if (["SEARCH_BODY_INTERRUPTED", "SEARCH_EMPTY", "SEARCH_INVALID_JSON"].includes(error.code)) retryable = true;
+      }
+      if (entry && (!response || response.status >= 500)) serperConnections.invalidate(entry);
+      recordModelDiagnostic("tools", { code: finalError.code || "SERPER_FAILED", phase: "serper_search", attempt, status: response?.status, elapsedMs: Date.now()-started });
+      if (!retryable || attempt === 3 || deadline.aborted) break;
+      recordModelDiagnostic("tools", { code: "SERPER_RETRY", phase: "serper_search", attempt: attempt+1 });
+    } finally { try { await response?.body?.cancel(); } catch {} }
+    try { await new Promise((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); reject(new Error("Search deadline")); };
+      const timer = setTimeout(() => { deadline.removeEventListener("abort", abort); resolve(); }, delay);
+      deadline.addEventListener("abort", abort, { once: true });
+      if (deadline.aborted) abort();
+    }); } catch { break; }
+  }
+  if (attempts > 1 && finalError) finalError.message += `（已自动重试${attempts-1}次）`;
+  throw finalError ?? new SearchRequestError("Serper 搜索超时，请稍后再试。", { code: "SERPER_TIMEOUT" });
+}
+
 async function searchSerper({ apiKey, query, country, language, scope, timeRange, startDate, endDate }) {
   if (!apiKey) throw new SearchRequestError("Serper API key 尚未配置，请管理员在聊天设置的联网搜索来源中填写。");
   const sites = scope === "bilibili" ? ["bilibili.com"] : scope === "chinese_community" ? CHINESE_COMMUNITY_DOMAINS : [];
@@ -15,27 +74,16 @@ async function searchSerper({ apiKey, query, country, language, scope, timeRange
   const gl = ({ china: "cn", "united states": "us", "united kingdom": "gb", japan: "jp", singapore: "sg", taiwan: "tw", "hong kong": "hk" })[country] ?? (/^[a-z]{2}$/u.test(country ?? "") ? country : "cn");
   const hl = /^zh/iu.test(language ?? "") ? (/hant|tw|hk/iu.test(language) ? "zh-tw" : "zh-cn") : language || "zh-cn";
   const tbs = ({ day: "qdr:d", week: "qdr:w", month: "qdr:m", year: "qdr:y" })[timeRange];
-  let response;
-  try {
-    response = await fetch("https://google.serper.dev/search", {
-      method: "POST", headers: { "X-API-KEY": apiKey, "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ q, gl, hl, num: 10, ...(tbs ? { tbs } : {}) }),
-      signal: AbortSignal.timeout(timeoutMs), redirect: "error",
-    });
-  } catch { throw new SearchRequestError("暂时无法连接 Serper 搜索服务，请稍后再试。"); }
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new SearchRequestError(response.status === 401 || response.status === 403 ? "Serper 拒绝了请求，请管理员检查密钥和账户额度。" : response.status === 429 ? "Serper 达到请求或额度限制，请稍后再试并检查账户额度。" : "Serper 搜索服务暂时出错，请稍后再试。");
-  }
-  const payload = await readJsonLimited(response);
+  const payload = await requestSerper(apiKey, { q, gl, hl, num: 10, ...(tbs ? { tbs } : {}) });
   const results = normalizeResults({ results: (Array.isArray(payload.organic) ? payload.organic : []).map(item => ({ title: item.title, url: item.link, content: item.snippet, published_date: item.date })) }, sites);
   return { results: results.map(item => ({ ...item, evidence: "search-snippet", ...(scope === "bilibili" ? { kind: "video" } : {}) })), provider: "serper", fallbackUsed: false };
 }
 
 export class SearchRequestError extends Error {
-  constructor(message) {
+  constructor(message, { code = "SEARCH_ERROR" } = {}) {
     super(message);
     this.name = "SearchRequestError";
+    this.code = code;
   }
 }
 
@@ -59,11 +107,11 @@ function safeSourceUrl(value) {
 async function readTextLimited(response) {
   const declaredLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
-    throw new SearchRequestError("网页搜索服务返回内容过大，请稍后再试。");
+    throw new SearchRequestError("网页搜索服务返回内容过大，请稍后再试。", { code: "SEARCH_RESPONSE_TOO_LARGE" });
   }
 
   const reader = response.body?.getReader();
-  if (!reader) throw new SearchRequestError("网页搜索服务暂时返回了空内容，请稍后再试。");
+  if (!reader) throw new SearchRequestError("网页搜索服务暂时返回了空内容，请稍后再试。", { code: "SEARCH_EMPTY" });
   const chunks = [];
   let total = 0;
   try {
@@ -73,7 +121,7 @@ async function readTextLimited(response) {
       total += value.byteLength;
       if (total > maxResponseBytes) {
         await reader.cancel();
-        throw new SearchRequestError("网页搜索服务返回内容过大，请稍后再试。");
+        throw new SearchRequestError("网页搜索服务返回内容过大，请稍后再试。", { code: "SEARCH_RESPONSE_TOO_LARGE" });
       }
       chunks.push(value);
     }
@@ -87,8 +135,9 @@ async function readTextLimited(response) {
 async function readJsonLimited(response) {
   try {
     return JSON.parse(await readTextLimited(response));
-  } catch {
-    throw new SearchRequestError("网页搜索服务返回了无法读取的内容，请稍后再试。");
+  } catch (error) {
+    if (error instanceof SearchRequestError) throw error;
+    throw new SearchRequestError("网页搜索服务返回了无法读取的内容，请稍后再试。", { code: error instanceof SyntaxError ? "SEARCH_INVALID_JSON" : "SEARCH_BODY_INTERRUPTED" });
   }
 }
 

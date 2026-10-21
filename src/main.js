@@ -21,6 +21,7 @@ import { ensureGroupPersonas, settingsForGroup } from "./group-personas.js";
 import { createOneBotBridge } from "./onebot.js";
 import { recordProactiveReply, reserveProactiveEvaluation, recordProactiveWaiting, acknowledgeGroupReply } from "./proactive-chat-state.js";
 import { parseSearchIntent } from "./search-intent.js";
+import { closeSearchConnections } from "./search.js";
 import { parseSummaryIntent } from "./content-summary.js";
 import { startManagementServer } from "./web.js";
 import { observeKnowledgeMessage, clearKnowledgeLearning } from "./knowledge-learning.js";
@@ -135,8 +136,8 @@ function isStickerCollectionRequest(text) {
   return /(?:给你(?:当|做|作|用作)?(?:个|一张|一些)?表情包?|(?:这张|这个).{0,8}(?:当|做).{0,4}表情|(?:收藏|保存|收下|学会|添加).{0,12}(?:表情包?|这张(?:图)?|这(?:个|些)图))/u.test(text);
 }
 
-async function readIncomingImages(images, sendMessage, { collectSources = false } = {}) {
-  if (!Array.isArray(images) || images.length > MAX_IMAGE_COUNT) throw new ImageInputError("一次最多处理 2 张图片，请减少图片数量后再试。");
+async function readIncomingImages(images, sendMessage, { collectSources = false, maxCount = MAX_IMAGE_COUNT } = {}) {
+  if (!Number.isInteger(maxCount) || maxCount < 1 || maxCount > 9 || !Array.isArray(images) || images.length > maxCount) throw new ImageInputError(`一次最多处理 ${maxCount <= 9 ? maxCount : MAX_IMAGE_COUNT} 张图片，请减少图片数量后再试。`);
   const prepared = [];
   let totalBytes = 0;
   let totalSourceBytes = 0;
@@ -788,12 +789,10 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       if (reservedImageSlot) { releaseImageSlot(); reservedImageSlot = false; }
       await prepareForwardReading(forwardedMessages, {
         allowed: forwardAllowed, userQuestion: authorized.content,
-        progress: text => sendMessage("send_msg", { message_type: authorized.scope,
-          ...(authorized.scope === "group" ? { group_id: authorized.groupId } : { user_id: authorized.userId }), message: text, auto_escape: true }, forwardAllowed),
         describe: options => describeForwardBatch({ ...options, apiKey: getCurrentLlmApiKey(), settings, allowed: () => forwardAllowed() && (options.allowed?.() ?? true) }),
         withImages: async (refs, consume) => {
           await acquireImageSlot();
-          try { if (!forwardAllowed()) return; return await consume(await readIncomingImages(refs, sendMessage)); }
+          try { if (!forwardAllowed()) return; return await consume(await readIncomingImages(refs, sendMessage, { maxCount: 9 })); }
           finally { releaseImageSlot(); }
         },
       });
@@ -861,16 +860,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
         }, 20000);
         videoProgressTimer.unref?.();
       },
-      onImageStart: () => {
-        if (videoProgressTimer) return;
-        videoProgressTimer = setTimeout(() => {
-          if (!waitingForVideo) return;
-          void sendMessage("send_msg", { message_type: authorized.scope,
-            ...(authorized.scope === "group" ? { group_id: authorized.groupId } : { user_id: authorized.userId }),
-            message: "我在仔细看这张图，辨认一下角色，稍等一会儿～", auto_escape: true }, () => waitingForVideo).catch(() => {});
-        }, 20000);
-        videoProgressTimer.unref?.();
-      },
+      onImageStart: () => {},
     });
     waitingForVideo = false;
     if (videoProgressTimer) clearTimeout(videoProgressTimer);
@@ -986,6 +976,7 @@ async function main() {
     process.off("SIGTERM", onSigterm);
     await bridge.close();
     await closeModelConnections();
+    await closeSearchConnections();
     await modelProxy?.stop();
     if (managementServer) {
       await new Promise((resolveClose, rejectClose) => {

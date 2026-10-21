@@ -91,7 +91,8 @@ export class ForwardReadError extends Error {
 export async function readForwardedMessages(message, { sendAction, allowed = () => true, imageNumbers = [] } = {}) {
   const nodes = [], images = [], notes = new Set(), seen = new Set(), speakers = new Map();
   const requestedImages = new Set(imageNumbers.filter(number => Number.isInteger(number) && number > 0 && number <= 100).slice(0, 2));
-  let apiCalls = 0, characters = 0, truncated = false, imageCount = 0;
+  let apiCalls = 0, characters = 0, truncated = false, limitReached = false, imageCount = 0;
+  function markLimit() { truncated = true; limitReached = true; }
   const deadline = Date.now() + 60_000;
   async function readAction(id) {
     if (!allowed() || Date.now() >= deadline) throw new ForwardReadError();
@@ -101,11 +102,11 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
   }
   async function visit(descriptor, depth) {
     if (!allowed()) throw new ForwardReadError("当前会话已不在授权范围内。");
-    if (depth > 4 || nodes.length >= 200 || characters >= 120000) { truncated = true; return; }
+    if (depth > 4 || nodes.length >= 200 || characters >= 120000) { markLimit(); return; }
     let entries = descriptor.inline;
     if (descriptor.id) {
       if (seen.has(descriptor.id)) { notes.add("重复或循环的转发未重复展开"); return; }
-      if (apiCalls >= 16) { truncated = true; return; }
+      if (apiCalls >= 16) { markLimit(); return; }
       seen.add(descriptor.id); apiCalls++;
       try {
         const response = await readAction(descriptor.id);
@@ -120,13 +121,13 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
     }
     if (!Array.isArray(entries)) { notes.add("部分转发未返回消息节点"); return; }
     for (const entry of entries.slice(0, 200)) {
-      if (nodes.length >= 200 || characters >= 120000) { truncated = true; break; }
+      if (nodes.length >= 200 || characters >= 120000) { markLimit(); break; }
       const data = entry?.type === "node" ? entry.data : entry;
       if (!data || typeof data !== "object") continue;
       const speakerKey = String(data.user_id ?? data.sender?.user_id ?? data.sender?.nickname ?? data.nickname ?? "unknown");
       if (!speakers.has(speakerKey)) speakers.set(speakerKey, `转发者${speakers.size + 1}`);
       const content = data.content ?? data.message;
-      if (Array.isArray(content) && content.length > 100) truncated = true;
+      if (Array.isArray(content) && content.length > 100) markLimit();
       const parts = typeof content === "string" ? [{ type: "text", data: { text: content.replace(/\[CQ:[^\]]+\]/gu, "[非文字消息]") } }] : Array.isArray(content) ? content.slice(0, 100) : [];
       const fragments = [], nested = [];
       for (const part of parts) {
@@ -134,7 +135,7 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
         if (forwards.length) { nested.push(...forwards); fragments.push("[嵌套转发]"); }
         else if (part?.type === "text") {
           const text = typeof part.data?.text === "string" ? redact(part.data.text) : "";
-          if (text.length > 12000) truncated = true;
+          if (text.length > 12000) markLimit();
           fragments.push(text.slice(0, 12000));
         }
         else if (part?.type === "image") {
@@ -152,21 +153,21 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
       }
       const rawText = fragments.join("");
       const text = rawText.slice(0, Math.min(12000, 120000 - characters));
-      if (rawText.length > text.length) truncated = true;
+      if (rawText.length > text.length) markLimit();
       characters += text.length;
       const time = Number(data.time) * 1000;
       const displayTime = Number.isFinite(time) && time > 0 && time < 4133980800000 ? new Date(time).toISOString() : null;
       nodes.push({ speaker: speakers.get(speakerKey), displayName: redact(data.sender?.card || data.sender?.nickname || data.nickname || "未署名").slice(0, 40), displayTime, content: text || "[未支持的消息内容]" });
       for (const child of nested.slice(0, 2)) await visit(child, depth + 1);
-      if (nested.length > 2) truncated = true;
+      if (nested.length > 2) markLimit();
     }
-    if (entries.length > 200) truncated = true;
+    if (entries.length > 200) markLimit();
   }
   for (const descriptor of forwardDescriptors(message)) await visit(descriptor, 0);
   if (!nodes.length) throw new ForwardReadError();
   if (!requestedImages.size && imageCount > images.length) notes.add("部分图片没有可读取文件标识，或超过100张边界，无法识别这些图片");
   if (requestedImages.size) notes.add("本次按用户指定的图片编号阅读，其余图片不在本次识图范围");
   if (requestedImages.size && images.length < requestedImages.size) notes.add("指定的部分图片未在当前已读节点中找到，或没有可读取文件标识");
-  if (truncated) notes.add("记录较长，受200条节点、4层嵌套、16次展开及120000字符边界限制，未读取全部内容");
+  if (limitReached) notes.add("记录较长，受200条节点、4层嵌套、16次展开及120000字符边界限制，未读取全部内容");
   return { nodes, images, notes: [...notes], truncated, apiCalls, imageCount, imagesRead: 0, requestedImageNumbers: [...requestedImages] };
 }
