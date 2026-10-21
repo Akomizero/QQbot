@@ -15,7 +15,7 @@ import {
 import { readAccessControl, writeAccessControl } from "./access-control-store.js";
 import { readCommands, writeCommands } from "./command-store.js";
 import { readLlmSettings, writeLlmSettings } from "./llm-settings-store.js";
-import { ensureGroupPersonas, saveGroupPersona, personaFields } from "./group-personas.js";
+import { ensureGroupPersonas, saveGroupPersona, personaFields, settingsForGroup } from "./group-personas.js";
 import { searchKnowledge, knowledgeRevision, readScopedKnowledge, writeScopedKnowledge } from "./knowledge-base.js";
 import { addSticker, deleteSticker, listStickers, readSticker, updateSticker } from "./sticker-store.js";
 import { queueStickerDescription } from "./sticker-learning.js";
@@ -29,6 +29,7 @@ import { readMemberImpressions, saveMemberImpression, forgetMemberImpression } f
 import { readVisualMemories, editVisualMemory } from "./visual-memory-store.js";
 import { visualLearningStatus } from "./visual-learning.js";
 import { memoryMaintenanceSummary, maintainGroupMemory } from "./memory-maintenance.js";
+import { readPersonalityGrowth, controlPersonalityGrowth, personalityGrowthBaseline } from "./personality-growth.js";
 
 const publicRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "public");
 const assets = new Map([
@@ -369,6 +370,21 @@ export async function startManagementServer({
       } catch {
         sendJson(response, 502, { error: "无法读取模型列表，请检查接口服务和网络后重试。" });
       }
+      return;
+    }
+
+    if (url.pathname === "/api/personality-growth") {
+      try {
+        if (!["GET", "POST"].includes(request.method)) { sendJson(response, 405, { error: "成长记录支持GET和POST。" }); return; }
+        const body = request.method === "POST" ? await readJsonBody(request) : null;
+        const groupId = knowledgeScope(request.method === "GET" ? url.searchParams.get("groupId") : body?.groupId);
+        if (!groupId) throw new Error("性格成长仅用于授权群，请选择一个群。");
+        const baseline = personalityGrowthBaseline(settingsForGroup(readLlmSettings(), groupId));
+        const growth = request.method === "GET" ? readPersonalityGrowth(groupId, baseline) : controlPersonalityGrowth(groupId, body, baseline);
+        const state = getKnowledgeLearningStatus().groups.find(state => state.groupId === groupId);
+        sendJson(response, 200, { growth, learning: { outcome: state?.lastGrowthOutcome ?? "waiting", buffered: state?.bufferedGrowthMessages ?? 0, lastCount: state?.lastGrowthFeedbackCount ?? 0 },
+          message: "本群成长设置已保存，下一次组织回复起生效。" });
+      } catch (error) { sendJson(response, error.statusCode ?? 400, { error: error.code ? "无法访问本群成长记录。" : error.message }); }
       return;
     }
 

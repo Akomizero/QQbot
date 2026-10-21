@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { memoryIndex, recordMemoryRecall, recallScore, clearMemberRecall } from "./memory-index.js";
+import { forgetGrowthContributor } from "./personality-growth.js";
 
 const file = new URL("../data/member-impressions.json", import.meta.url);
 const validId = value => typeof value === "string" && /^\d{1,32}$/u.test(value);
@@ -129,7 +130,7 @@ export function forgetMemberImpression(groupId, userId, expectedRevision) {
   if (expectedRevision !== undefined && expectedRevision !== revision(group)) throw Object.assign(new Error("本群成员印象刚有更新，请刷新。"), { statusCode: 409 });
   const old = group.members[userId] ?? fresh(userId);
   setMember(data, groupId, { ...fresh(userId), enabled: false, learningEnabled: false, generation: old.generation + 1, forgottenAt: Date.now(), updatedAt: Date.now() });
-  write(data); clearMemberRecall(groupId, userId); return readMemberImpressions(groupId);
+  write(data); clearMemberRecall(groupId, userId); forgetGrowthContributor(groupId, userId); return readMemberImpressions(groupId);
 }
 export function resumeMemberImpression(groupId, userId) {
   checkIds(groupId, userId); const data = load(), old = groupFor(data, groupId).members[userId] ?? fresh(userId);

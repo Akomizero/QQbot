@@ -4,6 +4,8 @@ import { readMemberImpressions } from "./member-impressions.js";
 import { memoryIndex, recordMemoryMaintenance } from "./memory-index.js";
 import { readAccessControl } from "./access-control-store.js";
 import { readLlmSettings } from "./llm-settings-store.js";
+import { maintainPersonalityGrowth, personalityGrowthBaseline } from "./personality-growth.js";
+import { settingsForGroup } from "./group-personas.js";
 
 function checkGroup(groupId) {
   if (typeof groupId !== "string" || !/^\d{1,32}$/u.test(groupId) || !readAccessControl().groupIds.includes(groupId))
@@ -55,8 +57,9 @@ export function startMemoryMaintenance() {
     if (stopped) return;
     let settings, groups;
     try { settings = readLlmSettings(); groups = readAccessControl().groupIds; } catch { return; }
-    if (!settings.knowledgeEnabled && settings.memberImpressionsEnabled === false) return;
     for (const groupId of groups) {
+      try { maintainPersonalityGrowth(groupId, personalityGrowthBaseline(settingsForGroup(settings, groupId))); } catch {}
+      if (!settings.knowledgeEnabled && settings.memberImpressionsEnabled === false) continue;
       if (Date.now() - (memoryIndex(groupId).maintenance?.at ?? 0) < 3600_000) continue;
       try { maintainGroupMemory(groupId); } catch { /* Preserve the original stores on invalid data; no chat output. */ }
     }

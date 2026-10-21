@@ -772,13 +772,14 @@ function showSelectedPersona() {
   document.querySelector("#persona-empty").hidden = Boolean(profile);
   personaError.hidden = true;
   personaDirty = false;
-  if (!profile) { personaStatus.textContent = "没有可配置的授权群。"; return; }
+  if (!profile) { document.querySelector("#personality-growth-panel").hidden = true; personaStatus.textContent = "没有可配置的授权群。"; return; }
   for (const [key, field] of Object.entries(personaFields)) {
     if (key === "enabled") field.checked = profile.enabled;
     else field.value = key === "botAliases" ? profile.botAliases.join("、") : profile[key];
   }
   document.querySelector("#persona-values").disabled = !profile.enabled;
   personaStatus.textContent = `群 ${profile.groupId} · ${profile.enabled ? "独立人设" : "跟随默认模板"} · 已保存`;
+  void loadPersonalityGrowth(profile.groupId);
 }
 
 async function loadGroupPersonas({ discard = false } = {}) {
@@ -845,6 +846,65 @@ personaForm.addEventListener("submit", async (event) => {
   finally { button.disabled = false; personaSelect.disabled = groupPersonas.length === 0; }
 });
 personaForm.addEventListener("invalid", (event) => { const detail = event.target.closest("details"); if (detail) detail.open = true; }, true);
+
+let personalityGrowthData = null, personalityGrowthLoad = 0, personalityGrowthBusy = false;
+const growthPanel = document.querySelector("#personality-growth-panel");
+function renderPersonalityGrowth(data) {
+  growthPanel.hidden = false;
+  document.querySelector("#personality-growth-enabled").checked = data.enabled;
+  document.querySelector("#personality-growth-learning").checked = data.learningEnabled;
+  document.querySelector("#rollback-personality-growth").disabled = !data.rollbackId;
+  document.querySelector("#unblock-personality-growth").hidden = !data.blocked.length;
+  const growthOutcomes = { waiting: "等待新的互动反馈", observed: "最近已积累互动反馈", "no-accepted-feedback": "最近未发现可采用的新反馈，或旧任务已失效", "persona-changed": "基础人设已变更，旧任务未写入", "storage-error": "成长记录保存失败，请检查本机资料文件", "model-error": "最近整理模型失败，有效短期缓冲将重试" };
+  document.querySelector("#personality-growth-status").textContent = `群 ${data.groupId} · ${data.enabled ? "成长效果启用" : "成长效果停用"} · ${data.learningEnabled ? "继续观察互动" : "已暂停积累"} · 已形成${data.habits.length}项习惯`
+    + (!data.baselineMatches ? " · 基础人设已变更，旧成长暂停套用，等待新互动" : "")
+    + (data.lastReflection ? ` · 最近反思${new Date(data.lastReflection.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}` : " · 尚无可用的新反馈，不会人为补写成长")
+    + (data.blocked.length ? ` · 已撤回方向：${data.blocked.join("、")}` : "")
+    + ` · ${growthOutcomes[data.learning?.outcome] ?? "等待反馈"}（短期缓冲${data.learning?.buffered ?? 0}条）`;
+  const list = (selector, lines, empty) => { const container = document.querySelector(selector); container.replaceChildren();
+    for (const line of lines.length ? lines : [empty]) { const item = document.createElement("p"); item.className = "field-hint"; item.textContent = line; container.append(item); } };
+  list("#personality-growth-habits", data.habits.map(habit => `${habit.label}：${habit.description} · ${habit.evidenceCount}条互动依据 · ${new Date(habit.since).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`), "尚未形成新的相处习惯，继续按基础人设自然聊天。");
+  list("#personality-growth-candidates", data.candidates.map(candidate => `${candidate.label} → ${candidate.description} · ${candidate.evidenceCount}条反馈 · ${candidate.ready ? "已满足基础证据，等待节奏与分歧核对" : "继续观察，不直接采用"}`), "暂无待观察的反馈。");
+  list("#personality-growth-journal", data.journal.map(entry => `${new Date(entry.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })} · ${entry.summary}`), "暂无成长记录；空白表示还没有发生对应调整。");
+}
+async function loadPersonalityGrowth(groupId = selectedPersonaId) {
+  const sequence = ++personalityGrowthLoad;
+  if (personalityGrowthData?.groupId !== groupId) {
+    for (const id of ["personality-growth-habits", "personality-growth-candidates", "personality-growth-journal"]) document.getElementById(id).replaceChildren();
+    document.querySelector("#personality-growth-status").textContent = "正在读取本群成长记录…";
+  }
+  personalityGrowthData = null;
+  if (!groupId) { growthPanel.hidden = true; return; }
+  try {
+    const result = await requestAdminApi(`/api/personality-growth?groupId=${encodeURIComponent(groupId)}`);
+    if (sequence !== personalityGrowthLoad || groupId !== selectedPersonaId) return;
+    personalityGrowthData = { ...result.growth, learning: result.learning }; renderPersonalityGrowth(personalityGrowthData);
+  } catch (error) {
+    if (sequence !== personalityGrowthLoad || groupId !== selectedPersonaId) return;
+    growthPanel.hidden = false; document.querySelector("#personality-growth-status").textContent = error.message;
+  }
+}
+async function controlPersonalityGrowth(action) {
+  const current = personalityGrowthData;
+  if (!current || current.groupId !== selectedPersonaId) return;
+  personalityGrowthBusy = true;
+  const controls = [...growthPanel.querySelectorAll("button,input")]; controls.forEach(control => { control.disabled = true; });
+  try {
+    const result = await requestAdminApi("/api/personality-growth", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      groupId: current.groupId, revision: current.revision, action, changeId: current.rollbackId,
+      enabled: document.querySelector("#personality-growth-enabled").checked, learningEnabled: document.querySelector("#personality-growth-learning").checked,
+    }) });
+    if (current.groupId === selectedPersonaId) { personalityGrowthData = { ...result.growth, learning: result.learning }; renderPersonalityGrowth(personalityGrowthData); }
+    showToast(result.message);
+  } catch (error) { showToast(error.message, true); }
+  finally { controls.forEach(control => { control.disabled = false; }); personalityGrowthBusy = false; await loadPersonalityGrowth(); }
+}
+document.querySelector("#personality-growth-enabled").addEventListener("change", () => void controlPersonalityGrowth("settings"));
+document.querySelector("#personality-growth-learning").addEventListener("change", () => void controlPersonalityGrowth("settings"));
+document.querySelector("#refresh-personality-growth").addEventListener("click", () => void loadPersonalityGrowth());
+document.querySelector("#rollback-personality-growth").addEventListener("click", () => void controlPersonalityGrowth("rollback"));
+document.querySelector("#unblock-personality-growth").addEventListener("click", () => void controlPersonalityGrowth("unblock"));
+setInterval(() => { if (!personalityGrowthBusy && !managementContent.hidden && !document.querySelector("#page-personas").hidden && !personaDirty) void loadPersonalityGrowth(); }, 15000);
 
 let knowledgeEntries = [];
 let knowledgeRevisionValue = "";
@@ -978,7 +1038,7 @@ async function loadKnowledge({ force = false } = {}) {
     knowledgeRevisionValue = data.revision;
     const states = data.learning?.groups ?? [];
     const buffered = states.reduce((sum, state) => sum + state.bufferedMessages, 0);
-    const outcomes = { waiting: "等待合并提炼", "waiting-context": "等待更多上下文", learning: "正在提炼", saved: "本轮知识已有新增或更新，请查看条目和待确认状态", "members-only": "本轮只更新了成员印象，没有新增群知识", "no-facts": "上次未发现新知识或与已有条目重复", "model-error": "提炼失败，有效短期缓冲会重试", "daily-limit": "旧版达到每日上限；新版已取消，等待新消息", "missing-key": "服务端未配置模型密钥", filtered: "本次明确教学未进入提炼：内容过长或含不应保存的信息", "buffer-cleared": "服务重启或缓冲已清理，等待新的群消息", expired: "短期缓冲已到期，等待新消息" };
+    const outcomes = { waiting: "等待合并提炼", "waiting-context": "等待更多上下文", learning: "正在提炼", saved: "本轮知识已有新增或更新，请查看条目和待确认状态", "members-only": "本轮只更新了成员印象，没有新增群知识", "growth-only": "本轮积累了相处反馈，详情在分群人设的性格成长中", "no-facts": "上次未发现新知识或与已有条目重复", "model-error": "提炼失败，有效短期缓冲会重试", "daily-limit": "旧版达到每日上限；新版已取消，等待新消息", "missing-key": "服务端未配置模型密钥", filtered: "本次明确教学未进入提炼：内容过长或含不应保存的信息", "buffer-cleared": "服务重启或缓冲已清理，等待新的群消息", expired: "短期缓冲已到期，等待新消息" };
     const latest = [...states].sort((a, b) => (b.lastAttemptAt || b.lastReceivedAt || 0) - (a.lastAttemptAt || a.lastReceivedAt || 0))[0];
     document.querySelector("#knowledge-learning-status").textContent = data.groupId === null ? "私聊资料由管理员手动维护，与所有群聊知识隔离。"
       : data.oneBotConnected === false ? "OneBot 未连接，暂时收不到群聊；本群已有知识仍保存在本机。"

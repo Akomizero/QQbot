@@ -29,6 +29,7 @@ import { parseSummaryIntent } from "./content-summary.js";
 import { startManagementServer } from "./web.js";
 import { observeKnowledgeMessage, clearKnowledgeLearning } from "./knowledge-learning.js";
 import { startMemoryMaintenance } from "./memory-maintenance.js";
+import { growthLearningStamp } from "./personality-growth.js";
 import { addLearnedSticker, approveStickerForSending, sendLlmResult, readSticker } from "./sticker-store.js";
 import { queueVisualCorrection } from "./visual-learning.js";
 import { isVisualCorrectionText } from "./visual-memory-store.js";
@@ -1074,7 +1075,8 @@ async function main() {
         if (!settings.visionEnabled) clearRecentGroupImages();
         if (settings.forwardReadingEnabled === false) clearForwardContext();
         if (!settings.proactiveChatEnabled) clearPassiveContexts();
-        if ((!settings.knowledgeLearningEnabled || !settings.knowledgeEnabled) && (!settings.memberImpressionsEnabled || !settings.memberImpressionsLearningEnabled)) clearKnowledgeLearning();
+        if ((!settings.knowledgeLearningEnabled || !settings.knowledgeEnabled) && (!settings.memberImpressionsEnabled || !settings.memberImpressionsLearningEnabled)
+          && !readAccessControl().groupIds.some(groupId => { const growth = growthLearningStamp(groupId); return growth.enabled && growth.learningEnabled; })) clearKnowledgeLearning();
         if (settings.stickersEnabled && settings.visionEnabled) queuePendingStickerDescriptions();
       },
       onGroupPersonaSaved: (groupId) => {

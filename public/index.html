@@ -401,6 +401,16 @@
             <div class="form-actions"><button type="submit" class="button button-primary" id="save-persona">保存这个群的人设</button><button type="button" class="button button-quiet" id="reset-persona">撤销修改</button><button type="button" class="button button-quiet" id="copy-default-persona">从默认模板填入</button></div>
             <p class="field-hint">保存只影响当前选中的群。新群复制默认模板并从空白群记忆开始；首次迁移保留现有群的人设。</p>
           </form>
+          <details class="settings-group" id="personality-growth-panel" hidden><summary>性格随相处成长（本群）</summary>
+            <p class="field-hint">在真实互动中逐渐调整闲聊篇幅、玩笑、语气、表情和分享方式，核心身份与人设由上面的设置决定。每个群独立成长，具体成员偏好和当前问题优先。</p>
+            <div class="settings-field settings-toggle"><label><input id="personality-growth-enabled" type="checkbox">在回复中体现本群已形成的相处习惯</label><label><input id="personality-growth-learning" type="checkbox">继续从与肥鱼的互动反馈中成长</label><p class="field-hint">开关立即保存，对下一次组织回复生效。暂停积累会保留已有习惯；关闭成长效果则暂不使用。</p></div>
+            <p id="personality-growth-status" class="field-hint" role="status">正在读取成长记录…</p>
+            <div id="personality-growth-habits" class="preference-rules"></div>
+            <details><summary>正在观察的反馈</summary><div id="personality-growth-candidates" class="preference-rules"></div></details>
+            <details><summary>成长与撤回记录</summary><div id="personality-growth-journal" class="preference-rules"></div></details>
+            <div class="form-actions"><button id="refresh-personality-growth" type="button" class="button button-quiet">刷新成长记录</button><button id="rollback-personality-growth" type="button" class="button button-quiet">撤回最近一次成长</button><button id="unblock-personality-growth" type="button" class="button button-quiet" hidden>允许重新学习撤回方向</button></div>
+            <p class="field-hint">至少3条独立反馈、2种不同表达，跨度至少30分钟，并来自两位成员或跨两个自然日；每次只调一个方向，至少间隔6小时。意见冲突先观察，不因几句起哄改变性格。记录只保留习惯、来源指纹和时间，不保存完整对话或编造心情；反思与原对话整理合用一次模型请求，不向群里发送成长进度。</p>
+          </details>
         </section>
 
         <section class="settings-panel" id="page-visual" data-management-page="visual" role="tabpanel" aria-label="角色视觉记忆">
