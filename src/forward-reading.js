@@ -9,7 +9,7 @@ export async function prepareForwardReading(record, { describe, withImages, prog
     }
     return text;
   };
-  let lastProgress = Date.now(), imageAttempts = 0;
+  let lastProgress = Date.now(), imageAttempts = 0, progressCount = 0, failedBatches = 0;
   const originals = record.nodes;
   record.batchPrepared = true;
   record.visualReadings = [];
@@ -18,9 +18,10 @@ export async function prepareForwardReading(record, { describe, withImages, prog
   const longText = JSON.stringify(originals).length > 18000;
   await progress(`这条转发有${record.nodes.length}条记录、${record.imageCount}张图。我会${record.images.length ? "每次看2张图，" : ""}${longText ? "分段读文字，" : ""}读完再一起回复，可能需要几分钟。`).catch(() => {});
   async function report() {
-    if (Date.now() - lastProgress < 60000 || !allowed()) return;
+    if (progressCount >= 2 || Date.now() - lastProgress < 5 * 60_000 || !allowed()) return;
     lastProgress = Date.now();
-    await progress(`还在读这条转发：已处理${record.textBatches.length}段文字，已尝试看${imageAttempts}/${record.images.length}张图，暂时未能读取的会在最后说明。`).catch(() => {});
+    progressCount++;
+    await progress(`还在读这条转发：已看懂${record.visualReadings.length}/${record.images.length}张图，已尝试${imageAttempts}张；其余还在处理，未读到的会在最后说明。`).catch(() => {});
   }
   if (longText) {
     const chunks = []; let chunk = [], length = 0;
@@ -63,12 +64,17 @@ export async function prepareForwardReading(record, { describe, withImages, prog
     } catch {
       // Retry loading individually when a bad file or a pair size limit hid its neighbour.
       if (!loaded && refs.length > 1) { for (const ref of refs) await readImages([ref]); return; }
+      const reason = loaded ? "图片已取得，但本批模型分析失败" : "未能取得图片文件";
+      if (!record.notes.includes(reason)) record.notes.push(reason);
     }
     imageAttempts += refs.length;
     for (const ref of refs) if (!record.visualReadings.some(item => item.number === ref.forwardedNumber)) record.failedImageNumbers.push(ref.forwardedNumber);
   }
   for (let index = 0; index < record.images.length && running(); index += 2) {
+    const previousRead = record.visualReadings.length;
     await readImages(record.images.slice(index, index + 2));
+    failedBatches = record.visualReadings.length > previousRead ? 0 : failedBatches + 1;
+    if (failedBatches >= 3) { record.notes.push("连续3批图片未能取得有效内容，已提前停止，未继续让群友等待"); break; }
     await report();
   }
   const readNumbers = new Set(record.visualReadings.map(item => item.number));

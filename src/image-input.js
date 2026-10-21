@@ -21,6 +21,13 @@ const initialGlobalHttpAgent = http.globalAgent;
 const initialGlobalHttpsAgent = https.globalAgent;
 const initialGlobalFetch = globalThis.fetch;
 const initialGlobalDispatcher = getGlobalDispatcher();
+let applicationDispatcher;
+// The application installs one known Undici proxy at startup. Native image
+// requests still use their own pinned agent; arbitrary later swaps stay rejected.
+export function registerApplicationImageDispatcher(dispatcher) {
+  if (applicationDispatcher || getGlobalDispatcher() !== initialGlobalDispatcher || !dispatcher) throw new Error("Unexpected image dispatcher registration");
+  applicationDispatcher = dispatcher;
+}
 const allowedImageHostnames = new Set([
   // Exact host in an observed QQ image attachment example:
   // https://github.com/LagrangeDev/Lagrange.Core/issues/315
@@ -406,7 +413,7 @@ function assertImageNetworkingBaseline() {
       || hasUnexpectedGlobalAgent(httpsAgent)
       || globalThis.fetch !== initialGlobalFetch
       || !initialGlobalDispatcher
-      || globalDispatcher !== initialGlobalDispatcher
+      || (globalDispatcher !== initialGlobalDispatcher && globalDispatcher !== applicationDispatcher)
     ) {
       throw new ImageInputError("这张图片暂时无法安全读取，请联系管理员检查网络配置后再试。");
     }
@@ -712,9 +719,9 @@ async function cancelResponseBody(response) {
   }
 }
 
-async function readImageBody(response, remainingBytes) {
-  const byteLimit = Math.min(MAX_IMAGE_BYTES, remainingBytes);
-  const tooLargeMessage = byteLimit < MAX_IMAGE_BYTES
+async function readImageBody(response, remainingBytes, { sourceMode = false } = {}) {
+  const byteLimit = Math.min(sourceMode ? MAX_SOURCE_IMAGE_BYTES : MAX_IMAGE_BYTES, remainingBytes);
+  const tooLargeMessage = sourceMode ? "转发图片或GIF每张最多20 MB，原始图片总量最多24 MB，请减少图片数量后再试。" : byteLimit < MAX_IMAGE_BYTES
     ? "图片总大小不能超过 6 MB，请压缩或减少图片数量后再试。"
     : "这张图片超过 4 MB，请压缩后重新发送。";
   const declaredLength = Number(response.headers.get("content-length"));
@@ -724,7 +731,7 @@ async function readImageBody(response, remainingBytes) {
   }
 
   const mime = (response.headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
-  const signature = imageFormats.get(mime);
+  const signature = imageFormats.get(mime) ?? (sourceMode && mime === "image/gif" ? isGifBytes : null);
   if (!signature) {
     await cancelResponseBody(response);
     throw new ImageInputError("目前只支持 JPG、PNG 或 WebP 图片，请用这几种格式重新发送。");
@@ -759,6 +766,24 @@ async function readImageBody(response, remainingBytes) {
   const bytes = Buffer.concat(chunks);
   if (!signature(bytes)) throw new ImageInputError("图片格式校验未通过，请重新发送 JPG、PNG 或 WebP 图片。");
   return { mime, bytes };
+}
+
+// Only a QQ media URL returned by a native message is accepted. Fetch directly
+// from the exact CDN, with public DNS pinning, TLS checks and no redirects.
+export async function prepareNapCatImageUrl(value, remainingBytes = MAX_TOTAL_IMAGE_BYTES, { remainingSourceBytes = MAX_TOTAL_SOURCE_IMAGE_BYTES } = {}) {
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw new ImageInputError("当前无法安全读取图片，请稍后再试。");
+  const url = validateAttachmentUrl(value);
+  let response;
+  try {
+    const address = await assertPublicDns(url.hostname);
+    response = await requestPinnedImage(url, address, null);
+    if (!response.ok) throw new ImageInputError("转发中的 QQ 图片链接暂不可用，请重新转发后再试。");
+    const { bytes } = await readImageBody(response, remainingSourceBytes, { sourceMode: true });
+    return await prepareNapCatImageBase64(bytes.toString("base64"), remainingBytes, { remainingSourceBytes });
+  } catch (error) {
+    if (error instanceof ImageInputError) throw error;
+    throw new ImageInputError("这张转发图片暂时无法读取，请重新转发后再试。");
+  } finally { if (response) { await cancelResponseBody(response); response.dispose(); } }
 }
 
 async function downloadImage(attachment, remainingBytes) {

@@ -3,6 +3,7 @@ import { Pool, ProxyAgent, setGlobalDispatcher } from "undici";
 import { resolve4 } from "node:dns/promises";
 import { isIP } from "node:net";
 import { loadEnvironment } from "./config.js";
+import { registerApplicationImageDispatcher } from "./image-input.js";
 
 loadEnvironment();
 
@@ -102,7 +103,9 @@ export function getConfiguredProxyUrl() { return configuredProxy || null; }
 
 if (configuredProxy) {
   try {
-    setGlobalDispatcher(new ProxyAgent(configuredProxy));
+    const dispatcher = new ProxyAgent(configuredProxy);
+    registerApplicationImageDispatcher(dispatcher);
+    setGlobalDispatcher(dispatcher);
   } catch {
     // If the local proxy setting is malformed, keep the standard direct-fetch behavior.
   }

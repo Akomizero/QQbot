@@ -541,6 +541,7 @@ async function getLlmReplyInternal({
       && settings.searchEnabled;
     let availableStickers = [];
     if (!proactive && !summaryResult && !illustratedDiscussion && settings.stickersEnabled !== false
+      && (!forwardedMessages || !forwardedMessages.imageCount || forwardedMessages.imagesRead > 0)
       && !parseStickerRejection(userMessage)) {
       try { availableStickers = stickerChoices(groupId ? `group:${groupId}` : senderQQId ? `private:${senderQQId}` : userId); } catch {}
     }

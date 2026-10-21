@@ -140,7 +140,8 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
         else if (part?.type === "image") {
           imageCount++; const number = imageCount;
           if (images.length < 100 && (!requestedImages.size || requestedImages.has(number)) && isNapCatImageFile(part.data?.file)) {
-            images.push({ type: "image", data: { file: part.data.file }, forwardedNumber: number }); fragments.push(`[转发图片${number}，待识图]`);
+            images.push({ type: "image", data: { file: part.data.file,
+              ...(typeof part.data.url === "string" && part.data.url.length <= 4096 ? { url: part.data.url } : {}) }, forwardedNumber: number }); fragments.push(`[转发图片${number}，待识图]`);
           } else fragments.push(`[转发图片${number}，未读取]`);
         } else if (part?.type === "at") fragments.push("[@转发记录中的成员]");
         else if (["face", "mface"].includes(part?.type)) fragments.push("[QQ表情]");

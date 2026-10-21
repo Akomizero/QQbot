@@ -1,6 +1,7 @@
 // Capture the image-networking baseline before application dependencies load.
 import {
   prepareNapCatImageBase64,
+  prepareNapCatImageUrl,
   isNapCatImageFile,
   ImageInputError,
   MAX_IMAGE_BYTES,
@@ -142,11 +143,13 @@ async function readIncomingImages(images, sendMessage, { collectSources = false 
   for (const segment of images) {
     const file = segment?.data?.file;
     if (!isNapCatImageFile(file)) throw new ImageInputError("这张图片的 QQ 文件标识无法识别，请从 QQ 重新发送图片或表情。");
-    const result = await sendMessage("get_image", { file });
-    const image = await prepareNapCatImageBase64(result?.base64, MAX_TOTAL_IMAGE_BYTES - totalBytes, {
+    const imageOptions = {
       remainingSourceBytes: MAX_TOTAL_SOURCE_IMAGE_BYTES - totalSourceBytes,
       includeSourceBytes: collectSources,
-    });
+    };
+    const image = segment.forwardedNumber && segment.data.url
+      ? await prepareNapCatImageUrl(segment.data.url, MAX_TOTAL_IMAGE_BYTES - totalBytes, imageOptions)
+      : await prepareNapCatImageBase64((await sendMessage("get_image", { file }))?.base64, MAX_TOTAL_IMAGE_BYTES - totalBytes, imageOptions);
     if (image.byteLength > MAX_IMAGE_BYTES) throw new ImageInputError("这张图片超过 4 MB，请压缩后重新发送。");
     totalBytes += image.byteLength;
     totalSourceBytes += image.sourceByteLength;
