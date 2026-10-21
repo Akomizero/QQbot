@@ -438,7 +438,7 @@
           <div class="settings-heading"><div><p class="eyebrow">MEMBER IMPRESSIONS</p><h2>成员长期印象</h2><p>按群号和QQ号分别积累兴趣、娱乐偏好、称呼与互动习惯；同名成员不会合并，不用于其他群或私聊。</p></div><button class="button button-quiet" id="refresh-members" type="button">刷新</button></div>
           <div class="knowledge-switches">
             <div class="settings-field settings-toggle"><label for="member-impressions-enabled"><input id="member-impressions-enabled" type="checkbox" checked>在相关对话中使用本群成员印象</label></div>
-            <div class="settings-field settings-toggle"><label for="member-impressions-learning-enabled"><input id="member-impressions-learning-enabled" type="checkbox" checked>从群友明确自述中积累</label><p class="field-hint">明确说“记住”的非敏感自述可直接启用，普通自述先待确认；不把转述或引用他人的话记给发言者。与知识提炼共用每群5分钟间隔、每天12次额度，不额外逐条调用模型。</p></div>
+            <div class="settings-field settings-toggle"><label for="member-impressions-learning-enabled"><input id="member-impressions-learning-enabled" type="checkbox" checked>从与AI的日常对话中逐步形成印象</label><p class="field-hint">不用说“记住”：话题和互动先成为初步观察，多次独立对话支持后自动启用；单次提问不等于喜欢某事。成员积累不设每日次数额度，合并发言并至少间隔5分钟整理，可与知识提炼合用一次请求。明确的新偏好可修正自动印象；初步观察14天未获支持会清理，已形成的对话观察60天未获支持会淡出、120天清理。管理员确认、拒绝和暂停会保留。</p></div>
           </div>
           <div class="member-toolbar"><div class="settings-field"><label for="member-group">所属群</label><select id="member-group"></select></div><input id="member-filter" aria-label="搜索成员昵称或QQ号" placeholder="搜索昵称或QQ号"><button class="button button-quiet" id="extract-member-impressions" type="button">提炼当前缓冲</button><button class="button button-primary" id="add-member" type="button">添加成员</button></div>
           <p id="member-learning-status" class="field-hint" aria-live="polite">正在读取本群积累状态。</p><p id="member-count" class="field-hint"></p>

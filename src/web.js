@@ -274,16 +274,20 @@ export async function startManagementServer({
           if (!groups.length) { sendJson(response, 200, { groups, groupId: null, members: [], revision: null, learning: null }); return; }
           const groupId = knowledgeScope(url.searchParams.get("groupId") ?? groups[0]);
           if (!groupId) throw new Error("请选择成员印象所属群。");
-          sendJson(response, 200, { groups, ...readMemberImpressions(groupId), learning: getKnowledgeLearningStatus().groups.find(state => state.groupId === groupId) ?? null }); return;
+          const impressions = readMemberImpressions(groupId);
+          const lastMemberSavedAt = Math.max(0, ...impressions.members.flatMap(member => member.facts.map(fact => fact.updatedAt ?? 0)));
+          sendJson(response, 200, { groups, ...impressions, learning: {
+            ...(getKnowledgeLearningStatus().groups.find(state => state.groupId === groupId) ?? {}), lastMemberSavedAt: lastMemberSavedAt || null,
+          } }); return;
         }
         const body = await readJsonBody(request), groupId = knowledgeScope(body?.groupId);
         if (!groupId) throw new Error("成员印象仅用于群聊，请选择一个群。");
         if (request.method === "POST" && url.pathname.endsWith("/learn")) {
           const settings = readLlmSettings();
           if (!settings.memberImpressionsEnabled || !settings.memberImpressionsLearningEnabled) throw new Error("请先开启成员印象与自动积累。");
-          if (!getKnowledgeLearningStatus().groups.some(state => state.groupId === groupId && state.bufferedMessages > 0)) { sendJson(response, 409, { error: "本群当前没有可提炼的发言。请先让成员在群内表达偏好；重启不恢复原始聊天缓冲。" }); return; }
+          if (!getKnowledgeLearningStatus().groups.some(state => state.groupId === groupId && state.bufferedMessages > 0)) { sendJson(response, 409, { error: "本群当前没有待整理对话。与AI正常聊天即可逐步积累；重启不恢复原始聊天缓冲。" }); return; }
           void flushKnowledgeLearning(groupId).catch(() => {});
-          sendJson(response, 202, { message: "已安排本群提炼，仍遵守共享的5分钟间隔与每天12次上限。稍后刷新成员印象。" }); return;
+          sendJson(response, 202, { message: "已安排整理本群对话，成员积累不设每日次数额度，仍按5分钟间隔合并处理。稍后刷新成员印象。" }); return;
         }
         if (url.pathname.endsWith("/learn") || !["PUT", "DELETE"].includes(request.method)) { sendJson(response, 405, { error: "成员印象支持GET、PUT和DELETE。" }); return; }
         if (typeof body?.revision !== "string") throw new Error("缺少修订号，请刷新后再保存。");

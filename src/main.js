@@ -605,11 +605,12 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
   const summaryIntent = parseSummaryIntent(authorized.content);
   const images = authorized.imageReference?.images ?? imageSegments(event.message);
   const imageRequested = images === null || images.length > 0;
-  if (authorized.scope === "group" && command.kind === "none" && !searchIntent && !summaryIntent
+  if (authorized.scope === "group" && command.kind === "none"
     && segmentsOf(event.message).every((segment) => ["text", "at", "image", "reply"].includes(segment?.type))) {
     try { observeKnowledgeMessage({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content.replaceAll("[QQ表情]", "").trim(), settings: readLlmSettings(),
       messageId: event.message_id, relatedStickerId: authorized.messageContext?.reply?.stickerId,
-      memberName: event.sender?.card || event.sender?.nickname || "", hasQuote: messageReferences(event.message).replyIds.length > 0 }); } catch {}
+      memberName: event.sender?.card || event.sender?.nickname || "", hasQuote: messageReferences(event.message).replyIds.length > 0 && !authorized.messageContext?.reply?.isBot,
+      directedToBot: authorized.mentioned && !authorized.messageContext?.mentions.some(item => !item.isBot) }); } catch {}
   }
 
   if (authorized.scope === "group" && !authorized.mentioned) {

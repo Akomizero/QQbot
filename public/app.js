@@ -1203,15 +1203,25 @@ function renderMemberList() {
   const list = document.querySelector("#member-list"), query = document.querySelector("#member-filter").value.trim().toLocaleLowerCase("zh-CN");
   list.replaceChildren();
   const members = memberData.members ?? [], candidates = members.reduce((sum, profile) => sum + profile.facts.filter(fact => fact.reviewStatus === "candidate").length, 0);
-  document.querySelector("#member-count").textContent = `${members.length} 位成员 · ${candidates} 条待确认印象`;
+  document.querySelector("#member-count").textContent = `${members.length} 位成员 · ${members.reduce((sum, profile) => sum + profile.facts.filter(fact => fact.enabled).length, 0)} 条可用印象 · ${candidates} 条初步观察/待确认`;
   for (const profile of members.filter(profile => !query || `${profile.name} ${profile.userId}`.toLocaleLowerCase("zh-CN").includes(query))) {
     const button = document.createElement("button"); button.type = "button"; button.className = "command-card";
     const name = document.createElement("strong"); name.textContent = profile.name || `QQ ${profile.userId}`;
     const detail = document.createElement("span"); detail.className = "field-hint";
     detail.textContent = `${profile.userId} · ${profile.facts.filter(fact => fact.enabled).length} 条启用 · ${profile.facts.filter(fact => fact.reviewStatus === "candidate").length} 条待确认${profile.learningEnabled ? "" : " · 已暂停积累"}${profile.enabled ? "" : " · 已停用召回"}`;
-    button.append(name, detail); button.addEventListener("click", () => editMember(profile)); list.append(button);
+    button.append(name, detail);
+    for (const fact of [...profile.facts].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3)) {
+      const preview = document.createElement("span"); preview.className = "field-hint";
+      preview.textContent = `${fact.supersededAt ? "已修正" : fact.stale ? "已淡出" : fact.enabled ? "已形成" : fact.reviewStatus === "rejected" ? "已拒绝" : "初步观察"} · ${fact.content} · ${fact.evidenceRefs?.length ?? 0}条支持`;
+      button.append(preview);
+    }
+    if (profile.maintenance?.removed || profile.maintenance?.faded) {
+      const maintenance = document.createElement("span"); maintenance.className = "field-hint";
+      maintenance.textContent = `自动维护：清理${profile.maintenance.removed ?? 0}条过期印象，淡出${profile.maintenance.faded ?? 0}条观察`; button.append(maintenance);
+    }
+    button.addEventListener("click", () => editMember(profile)); list.append(button);
   }
-  if (!list.children.length) { const empty = document.createElement("p"); empty.className = "field-hint"; empty.textContent = members.length ? "没有匹配的成员。" : "本群还没有成员印象。可让成员明确自述兴趣或说‘记住，我喜欢……’，也可由管理员添加。"; list.append(empty); }
+  if (!list.children.length) { const empty = document.createElement("p"); empty.className = "field-hint"; empty.textContent = members.length ? "没有匹配的成员。" : "本群暂未形成成员印象。与AI正常聊话题或互动即可逐步积累，不需要说‘记住’；初步观察也会显示在这里。"; list.append(empty); }
 }
 function memberField(label, value, onChange, { area = false, maxLength = 240 } = {}) {
   const wrapper = document.createElement("label"); wrapper.className = "settings-field";
@@ -1226,7 +1236,7 @@ function renderMemberFacts() {
     const card = document.createElement("article"); card.className = "member-fact";
     const status = document.createElement("p"); status.className = "field-hint";
     const evidence = fact.evidenceRefs ?? [];
-    status.textContent = `${{ candidate: "待确认", approved: fact.enabled ? "已确认/启用" : "已确认/停用", rejected: "已拒绝" }[fact.reviewStatus]} · ${fact.origin === "member" ? "成员自述" : "管理员维护"} · ${evidence.length} 条来源${evidence.length ? ` · 最近${new Date(evidence.at(-1).at).toLocaleString("zh-CN")}` : ""}${fact.supersedesId ? " · 修正候选，确认后停用旧版本" : ""}（修改需保存成员）`;
+    status.textContent = `${fact.supersededAt ? "已被新偏好修正" : fact.stale ? "长期未获支持/已淡出" : { candidate: "初步观察/待确认", approved: fact.enabled ? "已形成/启用" : "已确认/停用", rejected: "已拒绝" }[fact.reviewStatus]} · ${fact.origin === "member" ? fact.basis === "dialogue" ? "日常对话逐步形成" : "成员自述" : "管理员维护"} · ${evidence.length} 条来源${evidence.length ? ` · 最近${new Date(evidence.at(-1).at).toLocaleString("zh-CN")}` : ""}${fact.supersedesId && !fact.enabled ? " · 修正候选，确认后停用旧版本" : ""}（修改需保存成员）`;
     const kind = document.createElement("select"); kind.setAttribute("aria-label", "印象类别");
     for (const [value, label] of Object.entries(memberKindNames)) kind.add(new Option(label, value)); kind.value = fact.kind; kind.addEventListener("change", () => { fact.kind = kind.value; });
     card.append(status, kind, memberField("主题", fact.topic, value => { fact.topic = value; }, { maxLength: 30 }),
@@ -1265,8 +1275,8 @@ async function loadMemberImpressions() {
   memberGroupSelect.replaceChildren(...data.groups.map(id => new Option(`群 ${id}`, id))); memberGroupSelect.value = selectedMemberGroup;
   document.querySelector("#add-member").disabled = !selectedMemberGroup; document.querySelector("#extract-member-impressions").disabled = !selectedMemberGroup;
   const learning = data.learning;
-  const outcomes = { saved: "已保存新资料", "no-facts": "本次没有可用新资料", "waiting-context": "等待更多明确自述", waiting: "等待提炼", learning: "正在提炼", "model-error": "模型暂时失败，保留短期缓冲重试", "daily-limit": "今日次数已用完", "buffer-cleared": "重启或关闭后已清空原始缓冲", filtered: "已过滤不适合积累的内容", "missing-key": "尚未配置模型密钥" };
-  document.querySelector("#member-learning-status").textContent = selectedMemberGroup ? `群 ${selectedMemberGroup} · 共享缓冲${learning?.bufferedMessages ?? 0}条 · ${outcomes[learning?.outcome] ?? "等待成员自述"} · 今日${learning?.attemptsToday ?? 0}/12次${learning?.lastSavedAt ? ` · 最近保存${new Date(learning.lastSavedAt).toLocaleString("zh-CN")}，其中成员印象${learning.lastMemberAddedCount ?? 0}条` : ""}` : "请先在群与权限中添加授权群。";
+  const outcomes = { saved: "已保存或更新资料", "no-facts": "本次没有足够的新印象", "waiting-context": "等待与AI继续对话", waiting: "等待合并整理", learning: "正在整理对话", "model-error": "模型暂时失败，保留短期缓冲重试", "daily-limit": "知识提炼今日次数已用完", "buffer-cleared": "重启或关闭后已清空原始缓冲", filtered: "已过滤不适合积累的内容", "missing-key": "尚未配置模型密钥" };
+  document.querySelector("#member-learning-status").textContent = selectedMemberGroup ? `群 ${selectedMemberGroup} · 待整理对话${learning?.bufferedMemberMessages ?? 0}条（共享缓冲${learning?.bufferedMessages ?? 0}条） · ${learning?.outcome === "daily-limit" ? "知识提炼达上限，成员对话积累仍可继续" : outcomes[learning?.outcome] ?? "等待与AI对话"} · 今日后台成员整理${learning?.memberAttemptsToday ?? 0}次，无每日次数上限${learning?.lastMemberSavedAt ? ` · 最近印象更新${new Date(learning.lastMemberSavedAt).toLocaleString("zh-CN")}` : ""}` : "请先在群与权限中添加授权群。";
   renderMemberList();
   if (!memberRefreshTimer) memberRefreshTimer = setInterval(() => { if (!managementContent.hidden && !document.querySelector("#page-members").hidden && memberForm.hidden) void loadMemberImpressions().catch(() => {}); }, 10000);
 }
@@ -1300,7 +1310,7 @@ document.querySelector("#extract-member-impressions").addEventListener("click", 
 });
 
 function setupNavigation() {
-  const descriptions = { members: "按群和成员分别记住明确自述的兴趣与互动习惯，审核、纠正或清除印象。", chat: "管理通用功能、模型连接和默认人设；各群角色在分群人设中单独配置。", personas: "选择一个群，分别设置个性、表达风格、昵称呼唤词和长期记忆。", knowledge: "积累群内网梗和互动背景，查看、确认或编辑学到的知识。", stickers: "放入常用表情，给它们标上情绪和适用场景。", access: "查看连接状态，设置哪些群和好友可以与 bot 互动。", commands: "管理固定指令，常用回复一键配置。" };
+  const descriptions = { members: "从与AI的日常对话中逐步了解每位成员，显示初步观察、已形成印象及自动维护。", chat: "管理通用功能、模型连接和默认人设；各群角色在分群人设中单独配置。", personas: "选择一个群，分别设置个性、表达风格、昵称呼唤词和长期记忆。", knowledge: "积累群内网梗和互动背景，查看、确认或编辑学到的知识。", stickers: "放入常用表情，给它们标上情绪和适用场景。", access: "查看连接状态，设置哪些群和好友可以与 bot 互动。", commands: "管理固定指令，常用回复一键配置。" };
   const buttons = [...document.querySelectorAll(".management-nav [data-page]")];
   function showPage(page) {
     if (!Object.hasOwn(descriptions, page)) page = "chat";
