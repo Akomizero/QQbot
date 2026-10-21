@@ -31,7 +31,7 @@ foreach ($relative in @('package.json','package-lock.json','README.md','.env','.
     '.local\admin-auth.json','.local\admin-auth.setup.lock','.local\proactive-chat-state.json','.local\sticker-learning-state.json',
     '.local\power-settings-before-20261021.json',
     '.local\video-discovery-state.json','.local\video-discovery-ui-20261021.png','.local\video-topic-sharing-ui-20261022.png',
-    '.local\visual-memory-ui-20261022.png','.local\knowledge-growth-ui-20261022.png',
+    '.local\visual-memory-ui-20261022.png','.local\knowledge-growth-ui-20261022.png','.local\member-identity-ui-20261022.png',
     '.local\knowledge-learning-state.json','.local\model-diagnostics.json',
     '.local\model-proxy.json','.local\diagnostic-deliveries-20261021.json',
     '.local\model-private-pool-health-check-20261021.json','.local\dedicated-bot-route-check-20261021.json',

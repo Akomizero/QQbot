@@ -482,7 +482,7 @@
         </section>
 
         <section class="settings-panel" id="page-members" data-management-page="members" role="tabpanel" aria-label="按群成员的长期印象" hidden>
-          <div class="settings-heading"><div><p class="eyebrow">MEMBER IMPRESSIONS</p><h2>成员长期印象</h2><p>按群号和QQ号分别积累兴趣、娱乐偏好、称呼与互动习惯；同名成员不会合并，不用于其他群或私聊。</p></div><button class="button button-quiet" id="refresh-members" type="button">刷新</button></div>
+          <div class="settings-heading"><div><p class="eyebrow">MEMBER IMPRESSIONS</p><h2>成员长期印象</h2><p>按群号＋QQ号对应成员，昵称仅辅助显示，可留空。改昵称不会丢失或新建印象，同名不同QQ号不会合并；同一QQ在不同群的印象各自独立。</p></div><button class="button button-quiet" id="refresh-members" type="button">刷新</button></div>
           <div class="knowledge-switches">
             <div class="settings-field settings-toggle"><label for="member-impressions-enabled"><input id="member-impressions-enabled" type="checkbox" checked>在相关对话中使用本群成员印象</label></div>
             <div class="settings-field settings-toggle"><label for="member-impressions-learning-enabled"><input id="member-impressions-learning-enabled" type="checkbox" checked>从与AI的日常对话中逐步形成印象</label><p class="field-hint">不用说“记住”：话题和互动先成为初步观察，多次独立对话支持后自动启用；单次提问不等于喜欢某事。成员积累不设每日次数额度，合并发言并至少间隔5分钟整理，可与知识提炼合用一次请求。明确的新偏好可修正自动印象；初步观察14天未获支持会清理，已形成的对话观察60天未获支持会淡出、120天清理。管理员确认、拒绝和暂停会保留。</p></div>
@@ -493,7 +493,7 @@
             <form id="member-form" class="knowledge-editor" hidden>
               <h3 id="member-editor-title">成员印象</h3>
               <div class="settings-field"><label for="member-user-id">成员QQ号</label><input id="member-user-id" inputmode="numeric" pattern="[0-9]{1,32}" maxlength="32" required></div>
-              <div class="settings-field"><label for="member-name">显示昵称</label><input id="member-name" maxlength="40" placeholder="昵称只用于显示，身份以QQ号区分"></div>
+              <div class="settings-field"><label for="member-name">昵称 / 显示名（可选）</label><input id="member-name" maxlength="40" placeholder="仅方便查找，不参与身份匹配"><p class="field-hint">改名或清空此栏不影响已有印象；稳定标识是本群的成员QQ号。</p></div>
               <div class="settings-field settings-toggle"><label><input id="member-profile-enabled" type="checkbox" checked>使用此成员的已确认印象</label><label><input id="member-learning-enabled" type="checkbox" checked>继续为此成员积累</label></div>
               <div id="member-facts"></div><button class="button button-quiet" id="add-member-fact" type="button">添加一条印象</button>
               <p class="field-hint">只记录非敏感的兴趣、娱乐偏好、称呼与互动习惯。拒绝/删除的主题不会自动重新加入；确认修正候选后停用旧版本。每人最多20条。</p>

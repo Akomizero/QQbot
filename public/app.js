@@ -1234,9 +1234,9 @@ function renderMemberList() {
   document.querySelector("#member-count").textContent = `${members.length} 位成员 · ${members.reduce((sum, profile) => sum + profile.facts.filter(fact => fact.enabled).length, 0)} 条可用印象 · ${candidates} 条初步观察/待确认`;
   for (const profile of members.filter(profile => !query || `${profile.name} ${profile.userId}`.toLocaleLowerCase("zh-CN").includes(query))) {
     const button = document.createElement("button"); button.type = "button"; button.className = "command-card";
-    const name = document.createElement("strong"); name.textContent = profile.name || `QQ ${profile.userId}`;
+    const name = document.createElement("strong"); name.textContent = `QQ ${profile.userId}`;
     const detail = document.createElement("span"); detail.className = "field-hint";
-    detail.textContent = `${profile.userId} · ${profile.facts.filter(fact => fact.enabled).length} 条启用 · ${profile.facts.filter(fact => fact.reviewStatus === "candidate").length} 条待确认${profile.learningEnabled ? "" : " · 已暂停积累"}${profile.enabled ? "" : " · 已停用召回"}`;
+    detail.textContent = `${profile.name ? "显示名：" + profile.name + " · " : ""}${profile.facts.filter(fact => fact.enabled).length} 条启用 · ${profile.facts.filter(fact => fact.reviewStatus === "candidate").length} 条待确认${profile.learningEnabled ? "" : " · 已暂停积累"}${profile.enabled ? "" : " · 已停用召回"}`;
     button.append(name, detail);
     for (const fact of [...profile.facts].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3)) {
       const preview = document.createElement("span"); preview.className = "field-hint";
@@ -1281,7 +1281,7 @@ function renderMemberFacts() {
 }
 function editMember(profile = null) {
   memberDraft = profile ? structuredClone(profile) : { userId: "", name: "", enabled: true, learningEnabled: true, facts: [] };
-  document.querySelector("#member-editor-title").textContent = profile ? `编辑 ${profile.name || profile.userId}` : "添加成员印象";
+  document.querySelector("#member-editor-title").textContent = profile ? `成员 QQ ${profile.userId}` : "添加成员印象";
   document.querySelector("#member-user-id").value = memberDraft.userId; document.querySelector("#member-user-id").disabled = Boolean(profile);
   document.querySelector("#member-name").value = memberDraft.name;
   document.querySelector("#member-profile-enabled").checked = memberDraft.enabled;
