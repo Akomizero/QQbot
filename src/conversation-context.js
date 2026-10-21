@@ -86,3 +86,17 @@ export function clearGroupConversations(groupId) { if (groupId) groups.delete(gr
 export function findGroupLine(groupId, messageId) {
   return stateFor(groupId)?.lines.find(line => line.messageId === String(messageId)) ?? null;
 }
+
+export function searchLocalGroupHistory(groupId, query, excludeId) {
+  const lines = (stateFor(groupId)?.lines ?? []).filter(line => !excludeId || line.messageId !== String(excludeId));
+  const terms = [...new Intl.Segmenter("zh-CN", { granularity: "word" }).segment(String(query).slice(0, 300))]
+    .filter(item => item.isWordLike && item.segment.length > 1 && !/^(?:本群|群聊|记录|聊天|搜索|什么|刚才|之前)$/u.test(item.segment)).map(item => item.segment.toLowerCase());
+  const ranked = lines.map(line => ({ line, score: terms.filter(term => line.text.toLowerCase().includes(term)).length }))
+    .filter(item => !terms.length || item.score > 0).sort((a, b) => b.score - a.score || b.line.at - a.line.at).slice(0, 10).sort((a, b) => a.line.at - b.line.at);
+  const speakers = new Map();
+  return { source: "本群本机近期聊天缓存", coverage: "最近15分钟内最多20条普通文字，不是完整历史；缓存重启后可能不完整。", retrieval: "local-only",
+    results: ranked.map(({ line }) => {
+      if (!speakers.has(line.userId)) speakers.set(line.userId, `群友${speakers.size + 1}`);
+      return { speaker: line.isBot ? "bot" : speakers.get(line.userId), at: new Date(line.at).toISOString(), text: line.text };
+    }) };
+}

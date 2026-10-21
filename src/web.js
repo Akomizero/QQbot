@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getLlmApiKey, getSearchApiKey, loadEnvironment, updateLlmApiKey, validateLlmApiKey } from "./config.js";
+import { getLlmApiKey, getSearchApiKey, loadEnvironment, updateLlmApiKey, updateSerperApiKey, validateLlmApiKey } from "./config.js";
 import {
   clearAdminSession,
   getAdminAuthState,
@@ -554,6 +554,7 @@ export async function startManagementServer({
             settings: readLlmSettings(),
             apiKeyConfigured: Boolean(getLlmApiKey()),
             searchApiKeyConfigured: Boolean(getSearchApiKey()),
+            serperApiKeyConfigured: Boolean(getSearchApiKey("serper")),
           });
         } catch (error) {
           sendJson(response, 500, { error: error.message ?? "读取模型设置失败。" });
@@ -588,7 +589,11 @@ export async function startManagementServer({
             }
           }
 
+          if (body.clearSerperApiKey === true && body.serperApiKey) throw new Error("不能同时清除并填写 Serper key。");
+          const serperKey = body.serperApiKey === undefined || body.serperApiKey === "" ? undefined : validateLlmApiKey(body.serperApiKey);
           const settings = writeLlmSettings({ ...readLlmSettings(), ...body.settings });
+          if (body.clearSerperApiKey === true) updateSerperApiKey(null);
+          else if (serperKey !== undefined) updateSerperApiKey(serperKey);
           if (keyAction === "clear") updateLlmApiKey(null);
           if (keyAction === "set") updateLlmApiKey(requestedApiKey);
           try { onLlmSettingsSaved?.(settings); } catch {}
@@ -596,6 +601,8 @@ export async function startManagementServer({
             settings,
             apiKeyConfigured: Boolean(getLlmApiKey()),
             apiKeyUpdated: keyAction !== "none",
+            searchApiKeyConfigured: Boolean(getSearchApiKey()),
+            serperApiKeyConfigured: Boolean(getSearchApiKey("serper")),
             message: "模型设置已保存，立即生效。",
           });
         } catch (error) {

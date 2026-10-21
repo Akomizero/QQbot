@@ -8,6 +8,30 @@ const providerCooldowns = new Map();
 const resultCache = new Map();
 const cacheTtlMs = 5 * 60_000;
 
+async function searchSerper({ apiKey, query, country, language, scope, timeRange, startDate, endDate }) {
+  if (!apiKey) throw new SearchRequestError("Serper API key 尚未配置，请管理员在聊天设置的联网搜索来源中填写。");
+  const sites = scope === "bilibili" ? ["bilibili.com"] : scope === "chinese_community" ? CHINESE_COMMUNITY_DOMAINS : [];
+  const q = [query, sites.length ? `(${sites.map(domain => `site:${domain}`).join(" OR ")})` : "", startDate ? `after:${startDate}` : "", endDate ? `before:${new Date(Date.parse(endDate) + 86400000).toISOString().slice(0, 10)}` : ""].filter(Boolean).join(" ");
+  const gl = ({ china: "cn", "united states": "us", "united kingdom": "gb", japan: "jp", singapore: "sg", taiwan: "tw", "hong kong": "hk" })[country] ?? (/^[a-z]{2}$/u.test(country ?? "") ? country : "cn");
+  const hl = /^zh/iu.test(language ?? "") ? (/hant|tw|hk/iu.test(language) ? "zh-tw" : "zh-cn") : language || "zh-cn";
+  const tbs = ({ day: "qdr:d", week: "qdr:w", month: "qdr:m", year: "qdr:y" })[timeRange];
+  let response;
+  try {
+    response = await fetch("https://google.serper.dev/search", {
+      method: "POST", headers: { "X-API-KEY": apiKey, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ q, gl, hl, num: 10, ...(tbs ? { tbs } : {}) }),
+      signal: AbortSignal.timeout(timeoutMs), redirect: "error",
+    });
+  } catch { throw new SearchRequestError("暂时无法连接 Serper 搜索服务，请稍后再试。"); }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new SearchRequestError(response.status === 401 || response.status === 403 ? "Serper 拒绝了请求，请管理员检查密钥和账户额度。" : response.status === 429 ? "Serper 达到请求或额度限制，请稍后再试并检查账户额度。" : "Serper 搜索服务暂时出错，请稍后再试。");
+  }
+  const payload = await readJsonLimited(response);
+  const results = normalizeResults({ results: (Array.isArray(payload.organic) ? payload.organic : []).map(item => ({ title: item.title, url: item.link, content: item.snippet, published_date: item.date })) }, sites);
+  return { results: results.map(item => ({ ...item, evidence: "search-snippet", ...(scope === "bilibili" ? { kind: "video" } : {}) })), provider: "serper", fallbackUsed: false };
+}
+
 export class SearchRequestError extends Error {
   constructor(message) {
     super(message);
@@ -229,9 +253,16 @@ export async function searchWeb({ apiKey, provider = "tavily", query, country, l
   const normalizedQuery = cleanText(query, 400);
   if (!normalizedQuery) return { results: [], provider: "none", fallbackUsed: false };
   if([startDate,endDate].some(value=>value!==undefined&&!/^\d{4}-\d{2}-\d{2}$/u.test(value)))throw new SearchRequestError("搜索日期格式无效。");
-  const cacheKey = JSON.stringify([scope, normalizedQuery, country, language, Boolean(apiKey), timeRange, startDate, endDate]);
+  const cacheKey = JSON.stringify([provider, scope, normalizedQuery, country, language, Boolean(apiKey), timeRange, startDate, endDate]);
   const cached = resultCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
+  // Serper mode is strict: no silent switch to Tavily, Exa or native Bilibili search.
+  if (provider === "serper") {
+    const value = await searchSerper({ apiKey, query: normalizedQuery, country, language, scope, timeRange, startDate, endDate });
+    if (resultCache.size >= 100) resultCache.delete(resultCache.keys().next().value);
+    resultCache.set(cacheKey, { expiresAt: Date.now() + cacheTtlMs, value });
+    return value;
+  }
   const providers = scope === "bilibili"
     ? [["bilibili", () => searchBilibili(normalizedQuery)]]
     : [

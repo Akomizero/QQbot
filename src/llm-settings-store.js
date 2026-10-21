@@ -161,7 +161,7 @@ export function normalizeLlmSettings(settings) {
   if (typeof contentSummaryEnabled !== "boolean") throw new Error("内容总结开关必须是布尔值。");
   if (!["forward", "illustrated"].includes(summaryOutput)) throw new Error("总结发送方式无效。");
   if (!Number.isInteger(longReplyThreshold) || longReplyThreshold < 100 || longReplyThreshold > 3000) throw new Error("长回复折叠阈值必须是 100 到 3000 之间的整数。");
-  if (searchProvider !== "tavily") throw new Error("当前只支持 Tavily 网页搜索服务。");
+  if (!["tavily", "serper"].includes(searchProvider)) throw new Error("请选择 Serper 或 Tavily 网页搜索服务。");
   if (searchCountry.length > 64 || !/^[a-z -]*$/u.test(searchCountry)) throw new Error("搜索地区格式不正确。");
   if (searchLanguage && !/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/u.test(searchLanguage)) {
     throw new Error("搜索语言代码格式不正确，例如 zh-hans。");

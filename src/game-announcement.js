@@ -171,7 +171,12 @@ async function readWebAnnouncement(intent, { apiKey, settings }) {
   }
   if (!results.length) throw new AnnouncementReadError("没有找到可读取的公告来源，请发送游戏全名或官方公告链接。");
   let pages = [];
-  try { pages = await extractPages(results.map((result) => result.url), apiKey); } catch {}
+  try {
+    if (settings.searchProvider === "serper") {
+      const { readSummaryPages } = await import("./content-summary.js");
+      pages = (await readSummaryPages(results.map(result => result.url), { provider: "serper" })).pages.map(page => ({ ...page, raw_content: page.content }));
+    } else pages = await extractPages(results.map((result) => result.url), apiKey);
+  } catch {}
   if (!pages.length) throw new AnnouncementReadError("查到了相关页面，但没能读取公告正文，暂时不能可靠总结。请提供完整官方公告链接，或稍后再试。");
   // Generic pages are references; their official status and dates are not inferred from a search rank.
   return pages.map((page) => ({ title: results.find((result) => result.url === page.url)?.title ?? "公告参考页", game: intent.subject,
@@ -180,7 +185,7 @@ async function readWebAnnouncement(intent, { apiKey, settings }) {
 
 export async function readGameAnnouncement(intent, { apiKey, settings }) {
   if (!intent.subject && !intent.reference) throw new AnnouncementReadError("请带上游戏名称，例如「肥鱼，帮我总结一下绝地潜兵2最新更新公告」。");
-  const key = JSON.stringify([intent.subject, intent.reference, Boolean(apiKey)]);
+  const key = JSON.stringify([settings.searchProvider, intent.subject, intent.reference, Boolean(apiKey)]);
   const stored = cache.get(key);
   if (stored && stored.expiresAt > Date.now()) return stored.result;
   let game = null;

@@ -7,7 +7,7 @@ const validId = value => typeof value === "string" && /^[A-Za-z0-9_+=/.-]{1,512}
 const clean = value => String(value ?? "").replace(/[\u0000-\u0008\u000b-\u001f\u007f]/gu, "");
 function redact(value) {
   let text = clean(value).replace(/(?:sk-[a-z\d]{12,}|tvly-[a-z\d-]{12,}|gh[pousr]_[a-z\d]{20,}|github_pat_[a-z\d_]{20,})/giu, "[凭据已隐藏]");
-  for (const name of ["QQBOT_LLM_API_KEY", "TAVILY_API_KEY", "ONEBOT_ACCESS_TOKEN", "QQBOT_MODEL_PROXY_URL"]) {
+  for (const name of ["QQBOT_LLM_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "ONEBOT_ACCESS_TOKEN", "QQBOT_MODEL_PROXY_URL"]) {
     const secret = process.env[name]; if (secret?.length >= 8) text = text.replaceAll(secret, "[凭据已隐藏]");
   }
   return text;
@@ -92,7 +92,7 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
   const nodes = [], images = [], notes = new Set(), seen = new Set(), speakers = new Map();
   const requestedImages = new Set(imageNumbers.filter(number => Number.isInteger(number) && number > 0 && number <= 100).slice(0, 2));
   let apiCalls = 0, characters = 0, truncated = false, imageCount = 0;
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 60_000;
   async function readAction(id) {
     if (!allowed() || Date.now() >= deadline) throw new ForwardReadError();
     let timer;
@@ -101,11 +101,11 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
   }
   async function visit(descriptor, depth) {
     if (!allowed()) throw new ForwardReadError("当前会话已不在授权范围内。");
-    if (depth > 2 || nodes.length >= 40 || characters >= 20000) { truncated = true; return; }
+    if (depth > 4 || nodes.length >= 200 || characters >= 120000) { truncated = true; return; }
     let entries = descriptor.inline;
     if (descriptor.id) {
       if (seen.has(descriptor.id)) { notes.add("重复或循环的转发未重复展开"); return; }
-      if (apiCalls >= 4) { truncated = true; return; }
+      if (apiCalls >= 16) { truncated = true; return; }
       seen.add(descriptor.id); apiCalls++;
       try {
         const response = await readAction(descriptor.id);
@@ -119,8 +119,8 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
       }
     }
     if (!Array.isArray(entries)) { notes.add("部分转发未返回消息节点"); return; }
-    for (const entry of entries.slice(0, 40)) {
-      if (nodes.length >= 40 || characters >= 20000) { truncated = true; break; }
+    for (const entry of entries.slice(0, 200)) {
+      if (nodes.length >= 200 || characters >= 120000) { truncated = true; break; }
       const data = entry?.type === "node" ? entry.data : entry;
       if (!data || typeof data !== "object") continue;
       const speakerKey = String(data.user_id ?? data.sender?.user_id ?? data.sender?.nickname ?? data.nickname ?? "unknown");
@@ -134,12 +134,12 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
         if (forwards.length) { nested.push(...forwards); fragments.push("[嵌套转发]"); }
         else if (part?.type === "text") {
           const text = typeof part.data?.text === "string" ? redact(part.data.text) : "";
-          if (text.length > 1600) truncated = true;
-          fragments.push(text.slice(0, 1600));
+          if (text.length > 12000) truncated = true;
+          fragments.push(text.slice(0, 12000));
         }
         else if (part?.type === "image") {
           imageCount++; const number = imageCount;
-          if (images.length < 2 && (!requestedImages.size || requestedImages.has(number)) && isNapCatImageFile(part.data?.file)) {
+          if (images.length < 100 && (!requestedImages.size || requestedImages.has(number)) && isNapCatImageFile(part.data?.file)) {
             images.push({ type: "image", data: { file: part.data.file }, forwardedNumber: number }); fragments.push(`[转发图片${number}，待识图]`);
           } else fragments.push(`[转发图片${number}，未读取]`);
         } else if (part?.type === "at") fragments.push("[@转发记录中的成员]");
@@ -150,7 +150,7 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
         else if (part?.type === "json") fragments.push("[分享卡片，尚未展开]");
       }
       const rawText = fragments.join("");
-      const text = rawText.slice(0, Math.min(1600, 20000 - characters));
+      const text = rawText.slice(0, Math.min(12000, 120000 - characters));
       if (rawText.length > text.length) truncated = true;
       characters += text.length;
       const time = Number(data.time) * 1000;
@@ -159,12 +159,13 @@ export async function readForwardedMessages(message, { sendAction, allowed = () 
       for (const child of nested.slice(0, 2)) await visit(child, depth + 1);
       if (nested.length > 2) truncated = true;
     }
-    if (entries.length > 40) truncated = true;
+    if (entries.length > 200) truncated = true;
   }
   for (const descriptor of forwardDescriptors(message)) await visit(descriptor, 0);
   if (!nodes.length) throw new ForwardReadError();
-  if (imageCount > images.length) notes.add("只选取最多2张可读取图片，其余图片未识别");
+  if (!requestedImages.size && imageCount > images.length) notes.add("部分图片没有可读取文件标识，或超过100张边界，无法识别这些图片");
+  if (requestedImages.size) notes.add("本次按用户指定的图片编号阅读，其余图片不在本次识图范围");
   if (requestedImages.size && images.length < requestedImages.size) notes.add("指定的部分图片未在当前已读节点中找到，或没有可读取文件标识");
-  if (truncated) notes.add("记录较长，受40条节点、2层嵌套、4次展开及20000字符边界限制，未读取全部内容");
-  return { nodes, images, notes: [...notes], truncated, apiCalls, imageCount, imagesRead: 0 };
+  if (truncated) notes.add("记录较长，受200条节点、4层嵌套、16次展开及120000字符边界限制，未读取全部内容");
+  return { nodes, images, notes: [...notes], truncated, apiCalls, imageCount, imagesRead: 0, requestedImageNumbers: [...requestedImages] };
 }

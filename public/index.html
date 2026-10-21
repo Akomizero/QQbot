@@ -241,14 +241,23 @@
               <div class="settings-field">
                 <label for="search-provider">首选网页搜索服务</label>
                 <select id="search-provider" required>
+                  <option value="serper">Serper · Google 搜索结果</option>
                   <option value="tavily">Tavily Search</option>
                 </select>
-                <p class="field-hint">首选 Tavily；失败或无结果时自动尝试 Exa，再尝试 B站视频。备用通道不使用 Tavily key。</p>
+                <p class="field-hint">Serper 模式下所有网页搜索统一走 Google 结果接口，不自动换源；正文通过独立工具直接读取原网页。Tavily 模式保留 Exa / B站备用。群聊缓存和梗词库在本机检索，不发送给搜索服务；相关片段会交给当前模型组织回答。</p>
+              </div>
+              <div class="settings-field">
+                <label for="serper-api-key">Serper API key（只写入，不回显）</label>
+                <input id="serper-api-key" type="password" maxlength="2048" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="留空保持现有密钥">
+                <p class="field-hint">单独保存在服务端 .env，不使用模型或 Tavily 的密钥。</p>
+              </div>
+              <div class="settings-field settings-toggle">
+                <label for="clear-serper-api-key"><input id="clear-serper-api-key" type="checkbox">清除 Serper API key</label>
               </div>
               <div class="settings-field">
                 <label for="search-country">搜索地区</label>
                 <input id="search-country" maxlength="64" required>
-                <p class="field-hint">Tavily 地区名称，例如 china。</p>
+                <p class="field-hint">例如 china；Serper 也支持 cn、us、jp 等两位地区代码。</p>
               </div>
               <div class="settings-field">
                 <label for="search-language">搜索语言</label>
@@ -300,7 +309,7 @@
               </div>
               <div class="settings-field settings-toggle">
                 <label for="forward-reading-enabled"><input id="forward-reading-enabled" type="checkbox" checked>读取QQ合并转发消息</label>
-                <p class="field-hint">@bot并附转发、引用转发提问，或先发转发再于3分钟内说“看看刚才的聊天记录”。读取最多40条节点、2层嵌套和2张图片，也可说“看这条转发第3张”。长记录会说明截取范围。转发中的语音、视频和文件仅作未读取标记；正文不自动写进知识库、成员印象或表情库。所有授权群与白名单好友适用。</p>
+                <p class="field-hint">@bot并附转发、引用转发提问，或先发转发再于3分钟内说“看看刚才的聊天记录”。图片每批2张依次读取，长文字分段读，完成后统一回复并提示进度；较长记录可能需要几分钟。最多200条节点、4层嵌套、100张图和12万字符，也可指定“第3张”。失败或截取会明确说明；GIF仅首帧，语音、视频和文件尚不自动解析。转发正文不自动写进长期记忆或表情库。所有授权群与白名单好友适用。</p>
               </div>
               <div class="settings-field settings-toggle">
                 <label for="video-understanding-enabled"><input id="video-understanding-enabled" type="checkbox">启用B站视频理解与观后感</label>

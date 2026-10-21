@@ -12,6 +12,15 @@ const accessControlForm = document.querySelector("#access-control-form");
 const accessControlError = document.querySelector("#access-control-error");
 const apiKeyStatus = document.querySelector("#api-key-status");
 const tavilyKeyStatus = document.querySelector("#tavily-key-status");
+const serperKeyInput = document.querySelector("#serper-api-key");
+const clearSerperKey = document.querySelector("#clear-serper-api-key");
+function setSearchKeyStatus(data) {
+  const serper = data.settings.searchProvider === "serper";
+  const configured = serper ? data.serperApiKeyConfigured : data.searchApiKeyConfigured;
+  tavilyKeyStatus.textContent = serper ? `Serper ${configured ? "已配置 · Google 统一检索" : "未配置密钥"}` : `Tavily ${configured ? "已配置" : "未配置"} · Exa / B站备用`;
+  tavilyKeyStatus.classList.toggle("key-configured", Boolean(configured));
+  tavilyKeyStatus.classList.toggle("key-missing", !configured);
+}
 const onebotStatus = document.querySelector("#onebot-status");
 const llmApiKeyInput = document.querySelector("#llm-api-key");
 const clearLlmApiKey = document.querySelector("#clear-llm-api-key");
@@ -462,10 +471,15 @@ llmSettingsForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         settings,
         ...(apiKey ? { apiKey } : {}),
+        ...(serperKeyInput.value.trim() ? { serperApiKey: serperKeyInput.value.trim() } : {}),
+        ...(clearSerperKey.checked ? { clearSerperApiKey: true } : {}),
         ...(clearLlmApiKey.checked ? { clearApiKey: true } : {}),
       }),
     });
     setLlmSettings(data.settings);
+    setSearchKeyStatus(data);
+    serperKeyInput.value = "";
+    clearSerperKey.checked = false;
     llmApiKeyInput.value = "";
     clearLlmApiKey.checked = false;
     llmApiKeyInput.disabled = false;
@@ -629,9 +643,7 @@ async function loadManagementData() {
     setLlmSettings(data.settings);
     llmApiKeyConfigured = data.apiKeyConfigured;
     setApiKeyStatus(llmApiKeyConfigured);
-    tavilyKeyStatus.textContent = data.searchApiKeyConfigured ? "Tavily 已配置 · Exa / B站备用" : "Tavily 未配置 · 使用 Exa / B站备用";
-    tavilyKeyStatus.classList.toggle("key-configured", data.searchApiKeyConfigured);
-    tavilyKeyStatus.classList.toggle("key-missing", !data.searchApiKeyConfigured);
+    setSearchKeyStatus(data);
   } catch (error) {
     apiKeyStatus.textContent = "模型设置读取失败";
     apiKeyStatus.classList.add("key-missing");
@@ -1344,7 +1356,7 @@ function setupNavigation() {
     ["长回复发送", false, ["detailed-discussion-enabled", "long-reply-forward-enabled", "long-reply-threshold"]],
     ["联网阅读与总结", false, ["content-summary-enabled", "summary-output"]],
     ["模型连接与回复参数", false, ["llm-model", "llm-api-endpoint", "llm-api-key", "clear-llm-api-key", "llm-temperature", "llm-max-tokens", "model-retry-enabled", "refresh-model-diagnostics"]],
-    ["联网搜索来源", false, ["search-provider", "search-country", "search-language"]],
+    ["联网搜索来源", false, ["search-provider", "serper-api-key", "clear-serper-api-key", "search-country", "search-language"]],
     ["图片与角色辨认", false, ["character-recognition-enabled"]],
     ["B站视频理解", false, ["video-asr-enabled", "video-frames-enabled", "video-max-minutes"]],
     ["主动聊天频率", false, ["proactive-pause-when-ignored", "proactive-cooldown-minutes", "proactive-frequency-minutes", "proactive-debounce-seconds", "proactive-daily-limit"]],

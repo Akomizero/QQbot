@@ -83,12 +83,12 @@ async function tavilyPages(values, apiKey) {
     .map(page=>({url:page.url,...boundedContent(page.raw_content),method:"tavily",title:null,...extractedDateMetadata(page.raw_content)}));
 }
 
-export async function readSummaryPages(values, { apiKey } = {}) {
+export async function readSummaryPages(values, { apiKey, provider = "tavily" } = {}) {
   const urls=[];
   for (const value of values.slice(0,pageLimit)) { try { urls.push(publicPageUrl(value).href); } catch {} }
   if (!urls.length) throw new SummaryReadError("请提供公开的 HTTPS 文章或资料链接。");
   let pages=[];
-  try {pages=await tavilyPages(urls,apiKey);} catch {extractionRetryAt=Date.now()+60000;}
+  if (provider !== "serper") try {pages=await tavilyPages(urls,apiKey);} catch {extractionRetryAt=Date.now()+60000;}
   const outcomes=await Promise.all(urls.map(async url=>{
     const extracted=pages.find(page=>page.url===url);
     try {
@@ -118,7 +118,7 @@ export async function readSummarySource(intent, { apiKey,settings }) {
   if(!intent.subject&&!intent.references.length)throw new SummaryReadError("请告诉我想总结的主题、发送网页链接，或贴出一段文字。例如「总结近期AI新闻」或「总结这篇文章＋链接」。");
   if(!intent.references.length && /^(?:这篇文章|这个网页|这段内容|这份资料|这些内容|以下内容|下面内容)$/u.test(intent.subject))throw new SummaryReadError("请把文章链接或原文一起发来，我才能总结。");
   const dateWindow=summaryDateWindow(intent);
-  const key=JSON.stringify([intent.kind,intent.subject,intent.references,intent.latest,dateWindow,Boolean(apiKey)]);
+  const key=JSON.stringify([settings.searchProvider,intent.kind,intent.subject,intent.references,intent.latest,dateWindow,Boolean(apiKey)]);
   const cached=summaryCache.get(key);if(cached&&cached.expiresAt>Date.now())return cached.result;
   if(intent.gameIntent && (/(?:游戏|steam|绝地[潜潛战戰]兵|地[狱獄][潜潛]兵|helldivers)/iu.test(intent.subject) || /https:\/\/(?:store\.steampowered\.com|steamcommunity\.com)\//iu.test(intent.gameIntent.reference ?? ""))) {
     try { const steam=await tryReadSteamSummary(intent.gameIntent);if(steam) {
@@ -134,7 +134,7 @@ export async function readSummarySource(intent, { apiKey,settings }) {
     results=searched.results.filter(result=>result.kind!=="video").filter(result=>{try{publicPageUrl(result.url);return true;}catch{return false;}}).slice(0,pageLimit);
   }
   if(!results.length)throw new SummaryReadError("没有找到可读取的网页资料。可以把主题说得具体些，或直接发原文链接。");
-  const {pages,unread}=await readSummaryPages(results.map(result=>result.url),{apiKey});
+  const {pages,unread}=await readSummaryPages(results.map(result=>result.url),{apiKey,provider:settings.searchProvider});
   let articles=pages.map(page=>({title:page.title||results.find(result=>result.url===page.url||result.url===page.requestedUrl)?.title||"网页资料",url:page.url,publishedAt:page.publishedAt,
     updatedAt:page.updatedAt,publication:page.publication,modification:page.modification,dateVerification:page.dateVerification,
     searchDateHint:results.find(result=>result.url===page.url||result.url===page.requestedUrl)?.publishedDate??null,

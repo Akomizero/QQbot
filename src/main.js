@@ -8,11 +8,12 @@ import {
   MAX_TOTAL_IMAGE_BYTES,
   MAX_TOTAL_SOURCE_IMAGE_BYTES,
 } from "./image-input.js";
-import { getConfig, getLlmApiKey } from "./config.js";
+import { getConfig, getLlmApiKey, getSearchApiKey } from "./config.js";
 import { readAccessControl } from "./access-control-store.js";
 import { getCommandMatch } from "./commands.js";
 import { readCommands } from "./command-store.js";
-import { getLlmReply, LlmRequestError } from "./llm.js";
+import { getLlmReply, describeForwardBatch, LlmRequestError } from "./llm.js";
+import { prepareForwardReading } from "./forward-reading.js";
 import { extractBilibiliReference } from "./bilibili-video.js";
 import { readLlmSettings } from "./llm-settings-store.js";
 import { ensureGroupPersonas, settingsForGroup } from "./group-personas.js";
@@ -669,6 +670,16 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
   }
 
   let forwardedMessages = null;
+  let forwardBatchNeeded = false;
+  const forwardRevision = authorized.scope === "group" ? settingsForGroup(settings, authorized.groupId).groupPersonaRevision : null;
+  const forwardGeneration = authorized.scope === "group" ? memberLearningStamp(authorized.groupId, authorized.userId).generation : null;
+  const forwardAllowed = () => {
+    const latest = readLlmSettings(), access = readAccessControl();
+    return latest.forwardReadingEnabled !== false && (!settings.visionEnabled || !forwardedMessages?.imageCount || latest.visionEnabled)
+      && (authorized.scope === "group" ? access.groupIds.includes(authorized.groupId)
+        && settingsForGroup(latest, authorized.groupId).groupPersonaRevision === forwardRevision
+        && memberLearningStamp(authorized.groupId, authorized.userId).generation === forwardGeneration : access.userIds.includes(authorized.userId));
+  };
   if (settings.forwardReadingEnabled === false && hasForwardMessage(event.message)) {
     await sendText("转发消息阅读当前已关闭，请管理员在聊天设置中开启。"); return;
   }
@@ -687,11 +698,15 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
         images = imageSegments(event.message);
         if (authorized.imageReference) delete authorized.messageContext.imageSource;
         if (Array.isArray(images) && settings.visionEnabled) {
-          const chosen = forwardedMessages.images.slice(0, Math.max(0, MAX_IMAGE_COUNT - images.length));
+          forwardBatchNeeded = forwardedMessages.images.length > Math.max(0, MAX_IMAGE_COUNT - images.length)
+            || JSON.stringify(forwardedMessages.nodes).length > 18000;
+          const chosen = forwardBatchNeeded ? [] : forwardedMessages.images.slice(0, Math.max(0, MAX_IMAGE_COUNT - images.length));
           forwardedMessages.selectedImageNumbers = chosen.map(image => image.forwardedNumber);
           forwardedMessages.directImageCount = images.length;
           images = [...images, ...chosen];
         } else if (!settings.visionEnabled && forwardedMessages.imageCount) forwardedMessages.notes.push("图片识别关闭，转发图片仅作占位，未识别内容");
+        if (!settings.visionEnabled) forwardedMessages.images = [];
+        if (JSON.stringify(forwardedMessages.nodes).length > 18000) forwardBatchNeeded = true;
         imageRequested = images === null || images.length > 0;
       } catch (error) {
         await sendText(error instanceof ForwardReadError ? error.message : "这次没有读到转发消息，请重新转发或复制其中的文字。"); return;
@@ -766,6 +781,21 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
 
   try {
     if (forwardedMessages) forwardedMessages.imagesRead = Math.max(0, preloadedImageDataUrls.length - (forwardedMessages.directImageCount ?? 0));
+    if (forwardBatchNeeded) {
+      if (reservedImageSlot) { releaseImageSlot(); reservedImageSlot = false; }
+      await prepareForwardReading(forwardedMessages, {
+        allowed: forwardAllowed, userQuestion: authorized.content,
+        progress: text => sendMessage("send_msg", { message_type: authorized.scope,
+          ...(authorized.scope === "group" ? { group_id: authorized.groupId } : { user_id: authorized.userId }), message: text, auto_escape: true }, forwardAllowed),
+        describe: options => describeForwardBatch({ ...options, apiKey: getCurrentLlmApiKey(), settings, allowed: () => forwardAllowed() && (options.allowed?.() ?? true) }),
+        withImages: async (refs, consume) => {
+          await acquireImageSlot();
+          try { if (!forwardAllowed()) return; return await consume(await readIncomingImages(refs, sendMessage)); }
+          finally { releaseImageSlot(); }
+        },
+      });
+    }
+    if (forwardedMessages && !forwardAllowed()) return;
     if (tokenExchange && preparedImages[0]?.sourceBytes && readLlmSettings().stickersEnabled) {
       try {
         const bytes = preparedImages[0].sourceBytes;
@@ -848,6 +878,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
         message_type: authorized.scope,
         ...(authorized.scope === "group" ? { group_id: authorized.groupId } : { user_id: authorized.userId }),
       }, (action, params, stickerGuard = () => true) => sendMessage(action, params, () => stickerGuard()
+        && (!forwardedMessages || forwardAllowed())
         && (authorized.scope !== "group" || result.memberImpressionGeneration === undefined || memberLearningStamp(authorized.groupId, authorized.userId).generation === result.memberImpressionGeneration)
         && (authorized.scope !== "group" || !result.groupPersonaRevision
         || settingsForGroup(readLlmSettings(), authorized.groupId).groupPersonaRevision === result.groupPersonaRevision)), { ...readLlmSettings(), onSent: (sent, metadata) => {
@@ -882,6 +913,7 @@ async function main() {
   sensitiveValues.add(config.onebotAccessToken);
   if (config.llmApiKey) sensitiveValues.add(config.llmApiKey);
   if (config.searchApiKey) sensitiveValues.add(config.searchApiKey);
+  if (getSearchApiKey("serper")) sensitiveValues.add(getSearchApiKey("serper"));
   readCommands();
   readLlmSettings();
   readAccessControl();
@@ -919,6 +951,7 @@ async function main() {
         wsEndpoint: `ws://127.0.0.1:${config.onebotPort}${config.onebotPath}`,
       }),
       onLlmSettingsSaved: (settings) => {
+        if (getSearchApiKey("serper")) sensitiveValues.add(getSearchApiKey("serper"));
         if (!settings.conversationFollowupEnabled) clearGroupConversations();
         if (!settings.visionEnabled) clearRecentGroupImages();
         if (settings.forwardReadingEnabled === false) clearForwardContext();

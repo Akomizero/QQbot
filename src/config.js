@@ -74,8 +74,9 @@ export function getLlmApiKey() {
   return apiKey === "填入主线提供的APIKey" ? "" : apiKey;
 }
 
-export function getSearchApiKey() {
+export function getSearchApiKey(provider = "tavily") {
   loadEnvironment();
+  if (provider === "serper") return process.env.SERPER_API_KEY?.trim() ?? "";
   const apiKey = process.env.TAVILY_API_KEY?.trim() ?? "";
   return apiKey === "填入自行申请的TavilyAPIKey" ? "" : apiKey;
 }
@@ -91,6 +92,14 @@ export function validateLlmApiKey(apiKey) {
 }
 
 export function updateLlmApiKey(apiKey) {
+  return updateEnvironmentKey("QQBOT_LLM_API_KEY", apiKey);
+}
+
+export function updateSerperApiKey(apiKey) {
+  return updateEnvironmentKey("SERPER_API_KEY", apiKey);
+}
+
+function updateEnvironmentKey(name, apiKey) {
   const normalizedKey = apiKey === null ? null : validateLlmApiKey(apiKey);
   let source;
   try {
@@ -109,10 +118,10 @@ export function updateLlmApiKey(apiKey) {
   for (const line of lines) {
     const bom = line.startsWith("\uFEFF") ? "\uFEFF" : "";
     const plainLine = line.slice(bom.length);
-    if (/^\s*QQBOT_LLM_API_KEY\s*=/u.test(plainLine)) {
+    if (new RegExp(`^\\s*${name}\\s*=`).test(plainLine)) {
       if (!found && normalizedKey !== null) {
         const leadingWhitespace = plainLine.match(/^\s*/u)?.[0] ?? "";
-        nextLines.push(`${bom}${leadingWhitespace}QQBOT_LLM_API_KEY=${normalizedKey}`);
+        nextLines.push(`${bom}${leadingWhitespace}${name}=${normalizedKey}`);
       }
       found = true;
       continue;
@@ -121,7 +130,7 @@ export function updateLlmApiKey(apiKey) {
   }
   let finalNewline = hadFinalNewline;
   if (normalizedKey !== null && !found) {
-    nextLines.push(`QQBOT_LLM_API_KEY=${normalizedKey}`);
+    nextLines.push(`${name}=${normalizedKey}`);
     finalNewline = true;
   }
 
@@ -134,7 +143,7 @@ export function updateLlmApiKey(apiKey) {
     throw new Error("无法安全保存本机模型配置。");
   }
 
-  if (normalizedKey === null) delete process.env.QQBOT_LLM_API_KEY;
-  else process.env.QQBOT_LLM_API_KEY = normalizedKey;
+  if (normalizedKey === null) process.env[name] = "";
+  else process.env[name] = normalizedKey;
   return Boolean(normalizedKey);
 }
