@@ -23,6 +23,7 @@ import { getKnowledgeLearningStatus, flushKnowledgeLearning } from "./knowledge-
 import { readModelDiagnostics } from "./model-diagnostics.js";
 import { readReplyRecoveryStatus } from "./reply-recovery.js";
 import { readChatGptImageStatus } from "./chatgpt-imagegen.js";
+import { readVideoDiscoveryStatus } from "./video-discovery.js";
 import { readStickerPreferences, saveStickerPreferences } from "./sticker-preferences.js";
 import { readMemberImpressions, saveMemberImpression, forgetMemberImpression } from "./member-impressions.js";
 
@@ -532,6 +533,12 @@ export async function startManagementServer({
         if (request.method === "DELETE" && id && !url.pathname.endsWith("/image")) { deleteSticker(id); sendJson(response, 200, { deleted: true }); return; }
         sendJson(response, 405, { error: "此表情接口不支持该操作。" });
       } catch (error) { sendJson(response, error.statusCode ?? 400, { error: error.code ? "表情文件操作失败。" : error.message }); }
+      return;
+    }
+
+    if (url.pathname === "/api/video-discovery" && request.method === "GET") {
+      try { sendJson(response, 200, { status: readVideoDiscoveryStatus() }); }
+      catch { sendJson(response, 500, { error: "读取自主浏览视频状态失败。" }); }
       return;
     }
 

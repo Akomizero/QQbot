@@ -118,6 +118,16 @@ export function recordProactiveWaiting({ groupId, now = Date.now(), text, messag
   lastBotReplies.set(groupId, { at: now, text: String(text ?? "").slice(0, 180), messageId: messageId == null ? null : String(messageId) });
 }
 
+export function proactiveQuietUntil(groupId) { return readState().groups[groupId]?.quietUntil ?? 0; }
+
+export function recordExternalProactiveReply({ groupId, text, messageId, pauseWhenIgnored = true, now = Date.now() }) {
+  const state = readState();
+  const dayKey = new Date(now + 8 * 3600_000).toISOString().slice(0, 10);
+  const group = state.groups[groupId] ?? { dayKey, dailyAttempts: 0, dailyReplies: 0, lastEvaluationAt: 0, lastReplyAt: 0 };
+  group.lastReplyAt = now; state.groups[groupId] = group; writeState(state);
+  if (pauseWhenIgnored) recordProactiveWaiting({ groupId, now, text, messageId });
+}
+
 export function acknowledgeGroupReply({ groupId, mentioned = false, replyIds = [], text = "", now = Date.now() }) {
   const previous = lastBotReplies.get(groupId);
   let engaged = mentioned || Boolean(previous?.messageId && replyIds.includes(previous.messageId));

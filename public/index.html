@@ -270,6 +270,12 @@
               <div class="settings-field"><label>最近模型请求诊断</label><button type="button" id="refresh-model-diagnostics" class="button button-quiet">查看最近诊断</button><p class="field-hint">失败提示中的诊断号可对应下方记录。仅保存错误类别、次数和耗时，不保存聊天正文、密钥或接口地址。</p><pre id="model-diagnostics" class="diagnostic-output" role="status">点击查看，不会调用模型。</pre></div>
               <div class="settings-field"><label>后台重试与自动补发</label><button type="button" id="refresh-reply-recovery" class="button button-quiet">查看补发状态</button><p class="field-hint">临时服务故障会登记原消息，后台最多处理3轮，约1分钟、3分钟、10分钟后补试；成功后引用原请求补发一次。重启后继续，权限撤销或人设/成员印象被清除后取消。重试过程不发进度消息，发送状态不确定时不盲目重复。</p><pre id="reply-recovery-status" class="diagnostic-output" role="status">点击查看，不会重试或发送消息。</pre></div>
               <div class="settings-field settings-toggle">
+                <label for="video-discovery-enabled"><input id="video-discovery-enabled" type="checkbox">让肥鱼自主浏览B站，分享有趣的视频</label>
+                <p class="field-hint">使用本机 Edge 的B站首页推荐；先挑视频，再读取实际字幕、语音或关键画面，确实觉得有趣才向所选群发送原链接和一两句感受。各群按本群人设和话题分别判断。不设每小时或每天的分享条数配额，浏览节奏由模型决定；重复视频去重，沿用消息至少间隔10秒。开启“无人回应时暂缓”时，分享后无人回应会安静约65分钟，群友@bot或引用回应可提前恢复。页面与内容读取失败时安静跳过，不凭标题编观后感。保存模型设置后生效。</p>
+              </div>
+              <div class="settings-field"><label for="video-discovery-group-ids">允许主动分享视频的群</label><textarea id="video-discovery-group-ids" rows="2" maxlength="4300" placeholder="每行一个已授权群号"></textarea><p class="field-hint">只有同时在“群与权限”白名单内的群会生效。关闭B站视频理解也会暂停自动分享。需保持 Edge 和本机服务运行；不替账号点赞、投币、关注或发布B站动态，不读取或复制浏览器 Cookie。</p></div>
+              <div class="settings-field"><label>自主浏览与分享状态</label><button type="button" id="refresh-video-discovery" class="button button-quiet">查看视频浏览状态</button><pre id="video-discovery-status" class="diagnostic-output" role="status">点击查看，不会强制推荐或发送测试消息。</pre></div>
+              <div class="settings-field settings-toggle">
                 <label for="chatgpt-image-generation-enabled"><input id="chatgpt-image-generation-enabled" type="checkbox">使用 ChatGPT 网页生成图片</label>
                 <p class="field-hint">例如“肥鱼，画一张橙发少女的肖像”或 @bot 后发送“/生图 描述”。可附带最多两张参考图。使用本机 Edge 中已登录的 ChatGPT，每次新建独立聊天，全局串行排队，完成后发回原会话；不使用 Codex 生图或 API 兜底。需要保持系统运行、Edge 打开和网页授权有效；实际额度以网页提示为准。保存后生效。</p>
               </div>

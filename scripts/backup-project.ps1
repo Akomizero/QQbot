@@ -19,7 +19,7 @@ function Include-File([string]$relative) {
     if (-not $absolute.StartsWith($projectRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Backup source escaped the project.' }
     $files[$relative.Replace('\','/')] = $absolute
 }
-foreach ($folder in @('src','public','data','docs','scripts','test','tools','.local\chatgpt-images','.local\reply-recovery','.local\recovery-deliveries')) {
+foreach ($folder in @('src','public','data','docs','scripts','test','tools','.local\chatgpt-images','.local\reply-recovery','.local\recovery-deliveries','.local\video-recommendations')) {
     $folderPath = Join-Path $projectRoot $folder
     if (Test-Path -LiteralPath $folderPath -PathType Container) {
         foreach ($item in Get-ChildItem -LiteralPath $folderPath -File -Recurse -Force) {
@@ -30,6 +30,7 @@ foreach ($folder in @('src','public','data','docs','scripts','test','tools','.lo
 foreach ($relative in @('package.json','package-lock.json','README.md','.env','.env.example','.gitignore',
     '.local\admin-auth.json','.local\admin-auth.setup.lock','.local\proactive-chat-state.json','.local\sticker-learning-state.json',
     '.local\power-settings-before-20261021.json',
+    '.local\video-discovery-state.json','.local\video-discovery-ui-20261021.png',
     '.local\knowledge-learning-state.json','.local\model-diagnostics.json',
     '.local\model-proxy.json','.local\diagnostic-deliveries-20261021.json',
     '.local\model-private-pool-health-check-20261021.json','.local\dedicated-bot-route-check-20261021.json',

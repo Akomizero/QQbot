@@ -39,6 +39,8 @@ export const DEFAULT_LLM_SETTINGS = {
   chatgptImageGenerationEnabled: false,
   characterRecognitionEnabled: true,
   videoUnderstandingEnabled: true,
+  videoDiscoveryEnabled: false,
+  videoDiscoveryGroupIds: [],
   videoAsrEnabled: true,
   videoFramesEnabled: true,
   videoMaxMinutes: 10,
@@ -119,6 +121,8 @@ export function normalizeLlmSettings(settings) {
   const chatgptImageGenerationEnabled = settings.chatgptImageGenerationEnabled ?? DEFAULT_LLM_SETTINGS.chatgptImageGenerationEnabled;
   const characterRecognitionEnabled = settings.characterRecognitionEnabled ?? DEFAULT_LLM_SETTINGS.characterRecognitionEnabled;
   const videoUnderstandingEnabled = settings.videoUnderstandingEnabled ?? DEFAULT_LLM_SETTINGS.videoUnderstandingEnabled;
+  const videoDiscoveryEnabled = settings.videoDiscoveryEnabled ?? DEFAULT_LLM_SETTINGS.videoDiscoveryEnabled;
+  const videoDiscoveryGroupIds = settings.videoDiscoveryGroupIds ?? DEFAULT_LLM_SETTINGS.videoDiscoveryGroupIds;
   const videoAsrEnabled = settings.videoAsrEnabled ?? DEFAULT_LLM_SETTINGS.videoAsrEnabled;
   const videoFramesEnabled = settings.videoFramesEnabled ?? DEFAULT_LLM_SETTINGS.videoFramesEnabled;
   const videoMaxMinutes = Number(settings.videoMaxMinutes ?? DEFAULT_LLM_SETTINGS.videoMaxMinutes);
@@ -172,6 +176,8 @@ export function normalizeLlmSettings(settings) {
   if (typeof chatgptImageGenerationEnabled !== "boolean") throw new Error("ChatGPT 网页生图开关必须是布尔值。");
   if (typeof characterRecognitionEnabled !== "boolean") throw new Error("角色辨认开关必须是布尔值。");
   if ([videoUnderstandingEnabled, videoAsrEnabled, videoFramesEnabled].some((value) => typeof value !== "boolean")) throw new Error("视频理解开关必须是布尔值。");
+  if (typeof videoDiscoveryEnabled !== "boolean") throw new Error("自主浏览视频开关必须是布尔值。");
+  if (!Array.isArray(videoDiscoveryGroupIds) || videoDiscoveryGroupIds.length > 128 || videoDiscoveryGroupIds.some(id => typeof id !== "string" || !/^\d{1,32}$/u.test(id))) throw new Error("视频分享群必须填写有效的数字群号。");
   if (!Number.isInteger(videoMaxMinutes) || videoMaxMinutes < 1 || videoMaxMinutes > 30) throw new Error("视频媒体处理上限必须是 1 到 30 分钟。");
   if (typeof proactiveChatEnabled !== "boolean") throw new Error("主动聊天开关必须是布尔值。");
   if (!Number.isInteger(proactiveCooldownMinutes) || proactiveCooldownMinutes < 10 || proactiveCooldownMinutes > 1440) {
@@ -221,6 +227,8 @@ export function normalizeLlmSettings(settings) {
     chatgptImageGenerationEnabled,
     characterRecognitionEnabled,
     videoUnderstandingEnabled,
+    videoDiscoveryEnabled,
+    videoDiscoveryGroupIds: [...new Set(videoDiscoveryGroupIds)],
     videoAsrEnabled,
     videoFramesEnabled,
     videoMaxMinutes,

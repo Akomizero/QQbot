@@ -19,7 +19,8 @@ import { extractBilibiliReference } from "./bilibili-video.js";
 import { readLlmSettings } from "./llm-settings-store.js";
 import { ensureGroupPersonas, settingsForGroup } from "./group-personas.js";
 import { createOneBotBridge } from "./onebot.js";
-import { recordProactiveReply, reserveProactiveEvaluation, recordProactiveWaiting, acknowledgeGroupReply } from "./proactive-chat-state.js";
+import { recordProactiveReply, reserveProactiveEvaluation, recordProactiveWaiting, acknowledgeGroupReply, recordExternalProactiveReply } from "./proactive-chat-state.js";
+import { acknowledgeVideoDiscoveryReply, startVideoDiscovery } from "./video-discovery.js";
 import { parseSearchIntent } from "./search-intent.js";
 import { closeSearchConnections } from "./search.js";
 import { parseImageGenerationIntent, generateChatGptImage, recordGeneratedImageDelivery, stopChatGptImageGeneration, ChatGptImageError } from "./chatgpt-imagegen.js";
@@ -517,6 +518,7 @@ async function handleMessage(event, { sendMessage }, config) {
       authorized.followup = true;
     }
     try { acknowledgeGroupReply({ groupId: authorized.groupId, mentioned: authorized.mentioned, text: authorized.content, replyIds: segmentsOf(event.message).filter((segment) => segment?.type === "reply").map((segment) => String(segment.data?.id ?? "")) }); } catch {}
+    try { if (acknowledgeVideoDiscoveryReply({ groupId: authorized.groupId, mentioned: authorized.mentioned, text: authorized.content, replyIds: messageReferences(event.message).replyIds })) acknowledgeGroupReply({ groupId: authorized.groupId, mentioned: true }); } catch {}
     if (followupEnabled && !authorized.mentioned && isPossibleBotFollowup({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content,
       replyIds: messageReferences(event.message).replyIds, mentionsOther: hasAnyMention(event.message),
       hasImage: visionEnabled && Array.isArray(event.message) && event.message.some(segment => segment?.type === "image"),
@@ -1031,12 +1033,18 @@ async function main() {
   let managementServer;
   let modelProxy;
   let replyRecovery;
+  let videoDiscovery;
   try {
     modelProxy = await startConfiguredModelProxy();
     if (controller.signal.aborted) return;
     await bridge.start();
     replyRecovery = startReplyRecovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected,
       run: (job, allowed) => runRecoveredRequest(job, allowed, bridge.sendMessage, config), pace: paceOneBotMessage });
+    videoDiscovery = startVideoDiscovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected, pace: paceOneBotMessage,
+      onShared: ({ groupId, text, messageId }) => {
+        rememberGroupLine({ groupId, userId: "bot", text, isBot: true, messageId });
+        recordExternalProactiveReply({ groupId, text, messageId, pauseWhenIgnored: readLlmSettings().proactivePauseWhenIgnored });
+      } });
     managementServer = await startManagementServer({
       getOneBotStatus: () => ({
         ...bridge.getStatus(),
@@ -1072,6 +1080,7 @@ async function main() {
     await new Promise((resolve) => controller.signal.addEventListener("abort", resolve, { once: true }));
   } finally {
     replyRecovery?.stop();
+    videoDiscovery?.stop();
     stopChatGptImageGeneration();
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);

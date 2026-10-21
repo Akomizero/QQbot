@@ -72,6 +72,8 @@ const llmFields = {
   chatgptImageGenerationEnabled: document.querySelector("#chatgpt-image-generation-enabled"),
   characterRecognitionEnabled: document.querySelector("#character-recognition-enabled"),
   videoUnderstandingEnabled: document.querySelector("#video-understanding-enabled"),
+  videoDiscoveryEnabled: document.querySelector("#video-discovery-enabled"),
+  videoDiscoveryGroupIds: document.querySelector("#video-discovery-group-ids"),
   videoAsrEnabled: document.querySelector("#video-asr-enabled"),
   videoFramesEnabled: document.querySelector("#video-frames-enabled"),
   videoMaxMinutes: document.querySelector("#video-max-minutes"),
@@ -455,6 +457,8 @@ llmSettingsForm.addEventListener("submit", async (event) => {
     chatgptImageGenerationEnabled: llmFields.chatgptImageGenerationEnabled.checked,
     characterRecognitionEnabled: llmFields.characterRecognitionEnabled.checked,
     videoUnderstandingEnabled: llmFields.videoUnderstandingEnabled.checked,
+    videoDiscoveryEnabled: llmFields.videoDiscoveryEnabled.checked,
+    videoDiscoveryGroupIds: llmFields.videoDiscoveryGroupIds.value.split(/[\s,，、]+/u).map(value => value.trim()).filter(Boolean),
     videoAsrEnabled: llmFields.videoAsrEnabled.checked,
     videoFramesEnabled: llmFields.videoFramesEnabled.checked,
     videoMaxMinutes: Number(llmFields.videoMaxMinutes.value),
@@ -533,6 +537,8 @@ function setLlmSettings(settings) {
   llmFields.chatgptImageGenerationEnabled.checked = settings.chatgptImageGenerationEnabled === true;
   llmFields.characterRecognitionEnabled.checked = settings.characterRecognitionEnabled !== false;
   llmFields.videoUnderstandingEnabled.checked = settings.videoUnderstandingEnabled !== false;
+  llmFields.videoDiscoveryEnabled.checked = settings.videoDiscoveryEnabled === true;
+  llmFields.videoDiscoveryGroupIds.value = (settings.videoDiscoveryGroupIds ?? []).join("\n");
   llmFields.videoAsrEnabled.checked = settings.videoAsrEnabled !== false;
   llmFields.videoFramesEnabled.checked = settings.videoFramesEnabled !== false;
   llmFields.videoMaxMinutes.value = settings.videoMaxMinutes ?? 10;
@@ -1363,6 +1369,7 @@ function setupNavigation() {
     ["图片与角色辨认", false, ["character-recognition-enabled"]],
     ["ChatGPT 网页生图", false, ["chatgpt-image-generation-enabled", "refresh-chatgpt-imagegen"]],
     ["B站视频理解", false, ["video-asr-enabled", "video-frames-enabled", "video-max-minutes"]],
+    ["自主刷B站与群分享", false, ["video-discovery-enabled", "video-discovery-group-ids", "refresh-video-discovery"]],
     ["主动聊天频率", false, ["proactive-pause-when-ignored", "proactive-cooldown-minutes", "proactive-frequency-minutes", "proactive-debounce-seconds", "proactive-daily-limit"]],
   ].map(([title, open, ids]) => {
     const detail = document.createElement("details"); detail.className = "settings-group"; detail.open = open;
@@ -1383,6 +1390,15 @@ document.querySelector("#refresh-model-diagnostics").addEventListener("click", a
     output.textContent = data.events.length ? data.events.slice(-20).map(item => `${new Date(item.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}  ${item.id}  ${labels[item.kind] ?? item.kind}${item.code ? " · " + item.code : ""}${item.status ? " · HTTP " + item.status : ""}${item.route ? " · " + ({ proxy: "代理", proxy_ipv4: "代理 IPv4", model_proxy: "模型专用代理", model_proxy_ipv4: "模型专用代理 IPv4", direct: "直连" }[item.route] ?? item.route) : ""}${item.connection ? " · 连接池#" + item.connection + (item.reused ? " 复用" : " 新建") : ""}${item.phase ? " · " + item.phase : ""}${item.attempt ? " · 第" + item.attempt + "次连接" : ""}${item.elapsedMs !== undefined ? " · " + item.elapsedMs + "ms" : ""}`).join("\n") : "尚无新版诊断记录，收到模型请求后会出现。查看此页不会调用模型。";
   } catch (error) { output.textContent = error.message; } finally { button.disabled = false; }
 });
+document.querySelector("#refresh-video-discovery").addEventListener("click", async event => {
+  const button = event.currentTarget, output = document.querySelector("#video-discovery-status"); button.disabled = true;
+  try {
+    const { status } = await requestAdminApi("/api/video-discovery");
+    const labels = { SELECTING: "在挑视频", READING: "在读视频内容", REVIEWING: "在判断是否有趣", READY: "准备分享", SHARED: "已分享", NOT_INTERESTED: "这轮没挑到想看的", NOT_SHARING: "看过后决定不分享", NO_NEW_CANDIDATE: "等待新视频", VIDEO_OR_MODEL_UNAVAILABLE: "视频或模型暂不可用", BROWSER_UNAVAILABLE: "浏览器暂不可用", BILI_BROWSER_DISCONNECTED: "Edge 未连接", BILI_FEED_EMPTY: "首页未返回推荐视频", DELIVERY_UNCERTAIN: "发送状态待核对" };
+    output.textContent = `${status.enabled ? "已开启" : "已关闭"} · ${status.active ? "正在浏览/阅读" : "当前空闲"} · 发送待核对 ${status.uncertain}\n` + (status.groups.length ? status.groups.map(group => `群 ${group.groupId}：已读 ${group.reviewed} · 已分享 ${group.shared} · ${labels[group.lastCode] ?? group.lastCode ?? "等待下一轮"}${group.quietUntil > Date.now() ? " · 无人回应，暂时安静" : ""}${group.lastTitle ? "\n最近分享：" + group.lastTitle : ""}`).join("\n") : "尚未指定授权群。输入群号并保存模型设置后生效。");
+  } catch (error) { output.textContent = error.message; } finally { button.disabled = false; }
+});
+
 document.querySelector("#refresh-chatgpt-imagegen").addEventListener("click", async (event) => {
   const button = event.currentTarget, output = document.querySelector("#chatgpt-imagegen-status"); button.disabled = true;
   try { const { status } = await requestAdminApi("/api/chatgpt-imagegen");
