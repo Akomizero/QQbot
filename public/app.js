@@ -505,6 +505,11 @@ llmSettingsForm.addEventListener("submit", async (event) => {
   }
 });
 
+function updateLongReplyMode() {
+  llmFields.longReplyThreshold.closest(".settings-field").hidden=!llmFields.longReplyForwardEnabled.checked;
+}
+llmFields.longReplyForwardEnabled.addEventListener("change",updateLongReplyMode);
+
 function setLlmSettings(settings) {
   llmFields.apiEndpoint.value = settings.apiEndpoint;
   renderModelOptions(settings.model, availableModelIds);
@@ -527,8 +532,9 @@ function setLlmSettings(settings) {
   llmFields.temperature.value = settings.temperature;
   llmFields.maxTokens.value = settings.maxTokens;
   llmFields.modelRetryEnabled.checked = settings.modelRetryEnabled !== false;
-  llmFields.longReplyForwardEnabled.checked = settings.longReplyForwardEnabled !== false;
+  llmFields.longReplyForwardEnabled.checked = settings.longReplyForwardEnabled === true;
   llmFields.longReplyThreshold.value = settings.longReplyThreshold ?? 500;
+  updateLongReplyMode();
   llmFields.detailedDiscussionEnabled.checked = settings.detailedDiscussionEnabled !== false;
   llmFields.contentSummaryEnabled.checked = settings.contentSummaryEnabled !== false;
   llmFields.summaryOutput.value = settings.summaryOutput ?? "forward";

@@ -11,7 +11,7 @@ export async function sendRecoveredReply({ scope, peerId, sourceMessageId, text,
   if (!allowed()) return { cancelled: true };
   const id = recoveryId(scope, peerId, sourceMessageId), previous = readRecoveryDelivery(id);
   if (previous) return { duplicate: true, state: previous.state, message_id: previous.messageId };
-  const body = "【补上之前未完成的回复】\n" + text.trim().slice(0, 4000);
+  const body = "【补上之前未完成的回复】\n" + text;
   const receipt = { id, scope, peerId, sourceMessageId, state: "sending", at: Date.now(), textHash: digest(body) };
   mkdirSync(folder, { recursive: true });
   let fd;
@@ -24,17 +24,21 @@ export async function sendRecoveredReply({ scope, peerId, sourceMessageId, text,
     sent = await sendAction("send_msg", { message_type: scope, ...(scope === "group" ? { group_id: peerId } : { user_id: peerId }),
       message: [{ type: "reply", data: { id: sourceMessageId } }, { type: "text", data: { text: body } }], auto_escape: true }, allowed);
   } catch (error) {
-    if (error.code === "ONEBOT_ACTION_REJECTED") unlinkSync(fileFor(id));
-    else { receipt.state = "uncertain"; writeReceipt(id, receipt); }
+    if (error.code === "ONEBOT_ACTION_REJECTED"&&!error.partialDelivery) unlinkSync(fileFor(id));
+    else { receipt.state = "uncertain"; if(error.sentMessageIds)receipt.messageIds=error.sentMessageIds.map(String);writeReceipt(id, receipt); }
     throw error;
   }
-  if (sent?.cancelled) { receipt.state = "cancelled"; writeReceipt(id, receipt); return sent; }
-  receipt.state = "sent"; receipt.messageId = String(sent?.message_id ?? ""); writeReceipt(id, receipt);
+  if (sent?.cancelled) { receipt.state = "cancelled";if(sent.message_ids)receipt.messageIds=sent.message_ids.map(String);writeReceipt(id, receipt);return sent; }
+  receipt.state = "sent"; receipt.messageId = String(sent?.message_id ?? "");
+  receipt.messageIds=Array.isArray(sent?.message_ids)?sent.message_ids.map(String):[receipt.messageId];writeReceipt(id, receipt);
   try {
-    const readBack = await sendAction("get_msg", { message_id: receipt.messageId });
-    const actualText = (Array.isArray(readBack.message) ? readBack.message : []).filter(part => part.type === "text").map(part => part.data?.text ?? "").join("");
-    const sameScope = scope === "group" ? String(readBack.group_id) === peerId : !readBack.group_id;
-    if (sameScope && String(readBack.user_id ?? readBack.sender?.user_id) === selfId && digest(actualText) === receipt.textHash) { receipt.state = "verified"; writeReceipt(id, receipt); }
+    let actualText="",sameScope=true;
+    for(const id of receipt.messageIds) {
+      const readBack=await sendAction("get_msg",{message_id:id});
+      actualText+=(Array.isArray(readBack.message)?readBack.message:[]).filter(part=>part.type==="text").map(part=>part.data?.text??"").join("");
+      sameScope=sameScope&&(scope==="group"?String(readBack.group_id)===peerId:!readBack.group_id)&&String(readBack.user_id??readBack.sender?.user_id)===selfId;
+    }
+    if (sameScope && digest(actualText) === receipt.textHash) { receipt.state = "verified"; writeReceipt(id, receipt); }
   } catch { /* Acknowledged sends are never repeated just because read-back failed. */ }
   return { ...sent, recoveryId: id, verified: receipt.state === "verified" };
 }

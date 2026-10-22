@@ -34,8 +34,8 @@ import { addLearnedSticker, approveStickerForSending, sendLlmResult, readSticker
 import { queueVisualCorrection } from "./visual-learning.js";
 import { isVisualCorrectionText } from "./visual-memory-store.js";
 import { canLearnSticker, learnIncomingStickers, queuePendingStickerDescriptions, queueStickerDescription, stopStickerLearning } from "./sticker-learning.js";
-import { queueConversationReply, paceOneBotMessage } from "./reply-queue.js";
-import { sendReplyWithFolding } from "./long-reply.js";
+import { queueConversationReply, paceOneBotMessage, paceOneBotMessages } from "./reply-queue.js";
+import { sendReplyWithFolding, buildDirectReplyParts } from "./long-reply.js";
 import { rememberGroupLine, warmGroupContext, isPossibleBotFollowup, recentGroupContext, clearGroupConversations, findGroupLine } from "./conversation-context.js";
 import { resolveMessageContext, messageReferences } from "./message-context.js";
 import { noteStickerFeedback } from "./sticker-preferences.js";
@@ -566,6 +566,10 @@ async function handleMessage(event, { sendMessage }, config) {
       const latest = readAccessControl();
       return (params.message_type === "group" ? latest.groupIds.includes(String(params.group_id)) : latest.userIds.includes(String(params.user_id))) && extraGuard();
     };
+    if(action==="send_msg"&&readLlmSettings().longReplyForwardEnabled===false) {
+      const {foldLongReply,...directParams}=params;
+      return paceOneBotMessages(action,buildDirectReplyParts(directParams),sendMessage,allowed);
+    }
     return paceOneBotMessage(action, params, (queuedAction, queuedParams) => {
       if (queuedAction !== "send_msg") return sendMessage(queuedAction, queuedParams);
       const settings = settingsForGroup(readLlmSettings(), queuedParams.message_type === "group" ? String(queuedParams.group_id) : null);
@@ -1073,7 +1077,8 @@ async function main() {
     await bridge.start();
     memoryMaintenance = startMemoryMaintenance();
     replyRecovery = startReplyRecovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected,
-      run: (job, allowed) => runRecoveredRequest(job, allowed, bridge.sendMessage, config), pace: paceOneBotMessage });
+      run: (job, allowed) => runRecoveredRequest(job, allowed, bridge.sendMessage, config),
+      pace:(action,params,sendAction,allowed)=>paceOneBotMessages(action,action==="send_msg"?buildDirectReplyParts(params):[params],sendAction,allowed) });
     videoDiscovery = startVideoDiscovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected, pace: paceOneBotMessage,
       onShared: ({ groupId, text, messageId }) => {
         rememberGroupLine({ groupId, userId: "bot", text, isBot: true, messageId });

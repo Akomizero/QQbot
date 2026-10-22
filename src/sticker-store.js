@@ -229,7 +229,7 @@ export async function sendLlmResult(result, destination, sendMessage, { stickers
   let summaryImages = [];
   if (summary?.format === "illustrated" && result.reply) {
     try { summaryImages = await renderSummaryImages(result.reply, summary); }
-    catch { console.warn("摘要图文排版未完成，改用完整文字卡片。"); }
+    catch { console.warn("摘要图文排版未完成，改用完整文字发送。"); }
   }
   if (summaryImages.length) {
     const checkedIds=new Set((summary.verification?.claims??[]).flatMap(claim=>[...(claim.support??[]),...(claim.against??[])].map(item=>item.sourceId)));
@@ -249,8 +249,7 @@ export async function sendLlmResult(result, destination, sendMessage, { stickers
     sentAt.set(conversationId, Date.now());
   }
   try {
-    const sent = await sendMessage("send_msg", { ...destination, message: sticker || summaryImages.length ? message : result.reply,
-      ...(summary && !summaryImages.length ? { foldLongReply: true } : {}), auto_escape: true },
+    const sent = await sendMessage("send_msg", { ...destination, message: sticker || summaryImages.length ? message : result.reply, auto_escape: true },
       () => { if (!sticker) return true; const latest = listStickers().find(entry => entry.id === sticker.id && entry.enabled && entry.reviewStatus === "approved");
         return Boolean(latest && stickerPolicyAllows(latest, destination.message_type === "group" ? String(destination.group_id) : null)); });
     if (sent?.cancelled) { if (sticker) sentAt.delete(conversationId); return false; }

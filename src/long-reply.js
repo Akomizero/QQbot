@@ -1,6 +1,7 @@
 const nodeTextLimit = 1200;
 const paragraphTextLimit = 600;
 const maxForwardNodes = 50;
+const directTextLimit = 2000;
 
 // Keep every character (including paragraph breaks) and avoid splitting emoji pairs.
 function splitBoundedText(text, limit=nodeTextLimit) {
@@ -26,6 +27,30 @@ function splitBoundedText(text, limit=nodeTextLimit) {
     start = end;
   }
   return chunks;
+}
+
+// A transport batch is ordinary QQ messages, not forward nodes. Keep all text
+// and non-text segments in order; only split safely escaped outgoing text.
+export function buildDirectReplyParts(params) {
+  if(typeof params?.message==="string") {
+    if(params.auto_escape!==true)return [params];
+    const chunks=splitBoundedText(params.message,directTextLimit);
+    return chunks.length>1?chunks.map(message=>({...params,message})):[params];
+  }
+  if(!Array.isArray(params?.message)||params.message.some(segment=>!segment?.data
+    ||(segment.type==="text"?typeof segment.data.text!=="string":!["reply","image","at"].includes(segment.type))))return [params];
+  const parts=[];let current=[],length=0;
+  const flush=()=>{if(current.length)parts.push({...params,message:current});current=[];length=0;};
+  for(const segment of params.message) {
+    if(segment.type!=="text"){current.push(segment);continue;}
+    const chunks=splitBoundedText(segment.data.text,directTextLimit);
+    for(const text of chunks) {
+      const count=Array.from(text).length;
+      if(length&&length+count>directTextLimit)flush();
+      current.push({...segment,data:{...segment.data,text}});length+=count;
+    }
+  }
+  flush();return parts.length?parts:[params];
 }
 
 // Prefer semantic paragraphs inside one forward. Preserve whitespace, keep a

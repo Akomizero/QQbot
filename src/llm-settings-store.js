@@ -26,7 +26,7 @@ export const DEFAULT_LLM_SETTINGS = {
   temperature: 0.7,
   maxTokens: 800,
   modelRetryEnabled: true,
-  longReplyForwardEnabled: true,
+  longReplyForwardEnabled: false,
   longReplyThreshold: 500,
   detailedDiscussionEnabled: true,
   contentSummaryEnabled: true,
