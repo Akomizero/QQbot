@@ -327,7 +327,11 @@
               </div>
               <div class="settings-field settings-toggle">
                 <label for="forward-reading-enabled"><input id="forward-reading-enabled" type="checkbox" checked>读取QQ合并转发消息</label>
-                <p class="field-hint">@bot并附转发、引用转发提问，或先发转发再于3分钟内说“看看刚才的聊天记录”。图片每批最多9张，直接读取QQ图片链接，超出每批大小限制时拆小批次；长文字分段读。读图过程安静处理，不发进度群消息，完成后统一回复。连续3批失败提前结束。最多200条节点、4层嵌套、100张图和12万字符，也可指定“第3张”。失败或截取会明确说明；GIF仅首帧，语音、视频和文件尚不自动解析。转发正文不自动写进长期记忆或表情库。所有授权群与白名单好友适用。</p>
+                <p class="field-hint">@bot并附转发，或引用原转发提问。支持引用较早的记录、读取其他群友在本群发的转发，也可同时 @原发送者和 bot。每批最多9张图，安静读完后统一回复；也可指定“第3张”。所有授权群与白名单好友适用。</p>
+                <details id="forward-source-info"><summary>旧转发怎样关联、读取范围</summary>
+                  <p class="field-hint">明确引用的原转发不再受3分钟或15分钟关联时限限制，仍检查同一会话和记忆重置边界。无引用时，明确说“看看之前的转发消息”，会回查本会话最近24小时、最多300条记录；可 @原发送者缩小范围，多条候选且没指定最近一条时会请你引用。普通“看看”只关联同一发送者3分钟内的转发，不随意翻看别人的记录。</p>
+                  <p class="field-hint">图片优先读取QQ链接，超出大小限制时拆小批次；长文字分段读，连续3批图片失败提前结束。最多200条节点、4层嵌套、100张图和12万字符。失败或截取会明确说明，区分没找到原转发、展开失败和图片分析失败。GIF仅首帧，语音、视频和文件尚不自动解析；转发正文不自动写入长期记忆或表情库。</p>
+                </details>
               </div>
               <div class="settings-field settings-toggle">
                 <label for="video-understanding-enabled"><input id="video-understanding-enabled" type="checkbox">启用B站视频理解与观后感</label>

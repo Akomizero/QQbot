@@ -36,17 +36,21 @@ export function forwardDescriptors(message) {
 }
 export const hasForwardMessage = message => forwardDescriptors(message).length > 0;
 const forwardCue = text => /(?:转发|聊天记录|合并消息|这段(?:对话|记录)|刚才.{0,6}(?:记录|消息)|看看|看一下|如何评价|总结|概括|提炼)/u.test(text ?? "");
+const explicitForwardRequest = text => /^\/看转发(?:\s|$)/u.test(text??"")
+  || /转发|聊天记录|合并消息/u.test(text??"") && /看|读|总结|概括|提炼|评价|排序|排名|哪张|内容|里面|之前|刚才|那条|这条|那个|这个/u.test(text??"");
+const historyLookback = 24 * 60 * 60_000;
 const scopeKey = ({ scope, groupId, userId }) => `${scope}:${scope === "group" ? groupId : userId}`;
 function sinceFor(options) { return Math.max(options.since ?? 0, options.scope === "group" ? groupMemberContextSince(options.groupId) : 0); }
 function inScope(source, options, maxAge = recentTtl) {
   const now = Date.now(), at = Number(source?.time) * 1000;
-  if (!Number.isFinite(at) || at <= sinceFor(options) || at > now + 1500 || now - at > maxAge) return false;
+  if (!Number.isFinite(at) || at <= (options.contextSince ?? sinceFor(options)) || at > now + 1500 || now - at > maxAge) return false;
   return options.scope === "group" ? String(source.group_id ?? "") === options.groupId
     : !source.group_id && String(source.user_id ?? source.sender?.user_id) === options.userId;
 }
 export function rememberForwardMessage(options) {
   const { event, userId, selfId } = options;
-  if (!hasForwardMessage(event.message) || messageReferences(event.message).mentions.some(id => id !== selfId)) return;
+  const mentions=messageReferences(event.message).mentions;
+  if (!hasForwardMessage(event.message) || mentions.some(id => id !== selfId) && !mentions.includes(selfId)) return;
   for (const [key, entries] of recent) { const kept = entries.filter(entry => Date.now() - entry.at <= recentTtl); if (kept.length) recent.set(key, kept); else recent.delete(key); }
   const key = scopeKey(options); if (recent.size >= 128 && !recent.has(key)) return;
   if (!/^-?\d{1,32}$/u.test(String(event.message_id ?? ""))) return;
@@ -57,33 +61,76 @@ export function rememberForwardMessage(options) {
 export function clearForwardContext(groupId) { if (groupId) recent.delete(`group:${groupId}`); else recent.clear(); }
 export async function resolveForwardSource(options) {
   const { event, selfId, userId, text, sendAction } = options;
-  if (messageReferences(event.message).mentions.some(id => id !== selfId)) return null;
-  if (hasForwardMessage(event.message)) return { message: event.message, messageId: String(event.message_id) };
-  const quote = messageReferences(event.message).replyIds[0];
+  const refs=messageReferences(event.message),explicit=explicitForwardRequest(text);
+  const addressed=options.scope==="private"||refs.mentions.includes(selfId)||options.addressedToBot===true;
+  const scope={...options,contextSince:sinceFor(options)};
+  const resolution=value=>{try{options.onResolution?.({...value,explicit});}catch{}};
+  const selected=(source,relation,id=source.message_id)=>{
+    resolution({status:"resolved",relation,sourceTime:Number(source.time)*1000});
+    return {message:source.message,messageId:String(id),relation,sourceTime:Number(source.time)*1000};
+  };
+  if(refs.mentions.some(id=>id!==selfId)&&!addressed)return null;
+  if (hasForwardMessage(event.message)) return selected(event,"direct");
+  const quote = refs.replyIds[0];
   if (quote) {
     try {
       const source = await sendAction("get_msg", { message_id: quote });
-      return inScope(source, options, 15 * 60_000) && hasForwardMessage(source.message) ? { message: source.message, messageId: quote } : null;
-    } catch { return null; }
+      // An explicit quote identifies a concrete message. Its age is not an
+      // association guess; still enforce same-chat and reset/forget boundaries.
+      if(!inScope(source,scope,Infinity)){resolution({status:"unresolved",reason:"quoted-out-of-scope"});return null;}
+      if(hasForwardMessage(source.message))return selected(source,"quoted",quote);
+      resolution({status:"unresolved",reason:"quote-is-not-forward"});return null;
+    } catch {resolution({status:"unresolved",reason:"quoted-unavailable"});return null;}
   }
   if (!forwardCue(text)) return null;
+  const otherAuthors=refs.mentions.filter(id=>id!==selfId&&id!=="all");
+  const refersToOthers=otherAuthors.length>0||/(?:他|她|别人|其他人|群友|对方).{0,8}(?:发|转)|(?:看|读).{0,5}(?:他|她)(?:的|发)/u.test(text??"");
+  const requestAt=Number(event.time)*1000;
+  const before=Number.isFinite(requestAt)&&requestAt>0?Math.min(Date.now()+1500,requestAt+1500):Date.now()+1500;
   const cached = (recent.get(scopeKey(options)) ?? []).filter(entry => entry.userId === userId && Date.now() - entry.at <= recentTtl).at(-1);
-  if (cached) {
+  if (cached&&!refersToOthers) {
     try {
       const source = await sendAction("get_msg", { message_id: cached.id });
-      if (inScope(source, options) && String(source.user_id ?? source.sender?.user_id) === userId && hasForwardMessage(source.message)) return { message: source.message, messageId: cached.id };
+      if (inScope(source,scope)&&Number(source.time)*1000<=before&&String(source.user_id??source.sender?.user_id)===userId&&hasForwardMessage(source.message))return selected(source,"recent-own",cached.id);
     } catch {}
   }
   try {
-    const response = await sendAction(options.scope === "group" ? "get_group_msg_history" : "get_friend_msg_history", {
-      ...(options.scope === "group" ? { group_id: options.groupId } : { user_id: userId }), count: 20, disable_get_url: true,
-    });
-    const sources = (Array.isArray(response?.messages) ? response.messages.slice(-20) : []).filter(source => inScope(source, options)
-      && String(source.user_id ?? source.sender?.user_id) === userId && hasForwardMessage(source.message)
-      && !messageReferences(source.message).mentions.some(id => id !== selfId)
-      && String(source.message_id) !== String(event.message_id)).sort((a, b) => Number(a.time) - Number(b.time));
-    const source = sources.at(-1); return source ? { message: source.message, messageId: String(source.message_id) } : null;
-  } catch { return null; }
+    const extended=explicit&&addressed,seen=new Set(),sources=[];
+    let cursor=null;
+    for(let page=0;page<(extended?3:1);page++) {
+      const response=await sendAction(options.scope==="group"?"get_group_msg_history":"get_friend_msg_history",{
+        ...(options.scope==="group"?{group_id:options.groupId}:{user_id:userId}),count:extended?100:20,disable_get_url:true,parse_mult_msg:false,
+        ...(cursor?{message_seq:cursor,reverse_order:true}:{}),
+      });
+      const entries=(Array.isArray(response?.messages)?response.messages:[]).slice(0,extended?100:20).sort((a,b)=>Number(a.time)-Number(b.time));
+      let added=0;
+      for(const source of entries) {
+        const id=String(source.message_id),author=String(source.user_id??source.sender?.user_id);
+        if(seen.has(id))continue;seen.add(id);added++;
+        if(!inScope(source,scope,extended?historyLookback:recentTtl)||Number(source.time)*1000>before||id===String(event.message_id)||author===selfId||!hasForwardMessage(source.message))continue;
+        if(!extended&&author!==userId||otherAuthors.length&&!otherAuthors.includes(author)||refersToOthers&&!otherAuthors.length&&author===userId)continue;
+        const mentions=messageReferences(source.message).mentions;
+        if(mentions.some(id=>id!==selfId)&&!mentions.includes(selfId))continue;
+        sources.push(source);
+      }
+      if(!entries.length||!added||!extended)break;
+      if(Number(entries[0].time)*1000<=Math.max(Date.now()-historyLookback,scope.contextSince))break;
+      cursor=String(entries[0].message_id);
+    }
+    sources.sort((a,b)=>Number(a.time)-Number(b.time));
+    if(!extended) {
+      const source=sources.at(-1);if(source)return selected(source,"recent-own");
+    } else {
+      const ownRecent=!refersToOthers?sources.filter(source=>String(source.user_id??source.sender?.user_id)===userId&&Date.now()-Number(source.time)*1000<=recentTtl):[];
+      if(ownRecent.length)return selected(ownRecent.at(-1),"recent-own");
+      if(sources.length===1)return selected(sources[0],"history-unique");
+      if(sources.length>1) {
+        if(/(?:最近|最新|最后|上)[一1]条|刚发的/u.test(text??""))return selected(sources.at(-1),"history-latest");
+        resolution({status:"unresolved",reason:"ambiguous",candidateCount:sources.length});return null;
+      }
+    }
+    resolution({status:"unresolved",reason:"not-found"});return null;
+  } catch {resolution({status:"unresolved",reason:"history-unavailable"});return null;}
 }
 export class ForwardReadError extends Error {
   constructor(message = "这条转发消息暂时无法展开，可能已经失效或 NapCat 未返回内容。请重新转发，或复制其中的文字给我。") { super(message); this.name = "ForwardReadError"; }

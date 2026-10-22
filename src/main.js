@@ -39,7 +39,7 @@ import { sendReplyWithFolding } from "./long-reply.js";
 import { rememberGroupLine, warmGroupContext, isPossibleBotFollowup, recentGroupContext, clearGroupConversations, findGroupLine } from "./conversation-context.js";
 import { resolveMessageContext, messageReferences } from "./message-context.js";
 import { noteStickerFeedback } from "./sticker-preferences.js";
-import { memberMemoryCommand, forgetMemberImpression, resumeMemberImpression, memberLearningStamp } from "./member-impressions.js";
+import { memberMemoryCommand, forgetMemberImpression, resumeMemberImpression, memberLearningStamp, groupMemberContextSince } from "./member-impressions.js";
 import { clearMemberLearningBuffer } from "./knowledge-learning.js";
 import { startConfiguredModelProxy } from "./local-model-proxy.js";
 import { closeModelConnections } from "./model-transport.js";
@@ -750,27 +750,42 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
   let forwardBatchNeeded = false;
   const forwardRevision = authorized.scope === "group" ? settingsForGroup(settings, authorized.groupId).groupPersonaRevision : null;
   const forwardGeneration = authorized.scope === "group" ? memberLearningStamp(authorized.groupId, authorized.userId).generation : null;
+  const forwardContextSince = authorized.scope === "group" ? groupMemberContextSince(authorized.groupId) : null;
   const forwardAllowed = () => {
     const latest = readLlmSettings(), access = readAccessControl();
     return latest.forwardReadingEnabled !== false && (!settings.visionEnabled || !forwardedMessages?.imageCount || latest.visionEnabled)
       && (authorized.scope === "group" ? access.groupIds.includes(authorized.groupId)
         && settingsForGroup(latest, authorized.groupId).groupPersonaRevision === forwardRevision
-        && memberLearningStamp(authorized.groupId, authorized.userId).generation === forwardGeneration : access.userIds.includes(authorized.userId));
+        && memberLearningStamp(authorized.groupId, authorized.userId).generation === forwardGeneration
+        && groupMemberContextSince(authorized.groupId) === forwardContextSince : access.userIds.includes(authorized.userId));
   };
   if (settings.forwardReadingEnabled === false && hasForwardMessage(event.message)) {
     await sendText("转发消息阅读当前已关闭，请管理员在聊天设置中开启。"); return;
   }
   if (settings.forwardReadingEnabled !== false) {
+    let forwardResolution=null;
     const source = authorized.recoveryForwardMessage ?? await resolveForwardSource({ event, ...authorized, text: authorized.content, selfId: numericId(event.self_id),
+      addressedToBot:authorized.mentioned===true&&!authorized.followup,
+      onResolution:value=>{forwardResolution=value;},
       since: authorized.scope === "group" ? settingsForGroup(settings, authorized.groupId).groupPersonaSince : 0, sendAction: sendMessage });
+    if(forwardResolution)authorized.messageContext={...authorized.messageContext,forwardSource:forwardResolution};
+    if(!source&&forwardResolution?.explicit&&forwardResolution.status==="unresolved") {
+      const explanations={
+        ambiguous:"找到了不止一条可能的合并转发，暂时无法确定你指哪条。请引用那条转发并 @我，我会展开里面的文字和图片。",
+        "not-found":"这次没有定位到你说的那条转发。我能展开合并转发及其中图片；请引用原转发并 @我。无引用时只查本会话最近24小时、最多300条记录。",
+        "quoted-out-of-scope":"这条引用不在当前会话可读取的范围内，或早于记忆重置边界。请在当前会话重新转发给我。",
+        "quote-is-not-forward":"当前引用的不是合并转发消息。请引用原始转发卡片，或把里面的图片直接发来。",
+        "quoted-unavailable":"这次未能取得你引用的原消息，尚未展开其中内容。可以稍后重试，或重新转发原记录；这不表示转发图片功能不支持。",
+        "history-unavailable":"这次查询本会话历史记录失败，尚未定位到原转发。请引用原转发并 @我，或稍后再试。",
+      };
+      await sendText(explanations[forwardResolution.reason]??explanations["not-found"]);return;
+    }
     if (source) {
       recoveryForwardSourceMessageId = source.messageId;
       try {
         forwardedMessages = await readForwardedMessages(source.message, { sendAction: sendMessage,
-          imageNumbers: [...authorized.content.matchAll(/第\s*(\d{1,3})\s*张/gu)].map(match => Number(match[1])), allowed: () => {
-          const latest = readAccessControl(); return readLlmSettings().forwardReadingEnabled !== false
-            && (authorized.scope === "group" ? latest.groupIds.includes(authorized.groupId) : latest.userIds.includes(authorized.userId));
-        } });
+          imageNumbers: [...authorized.content.matchAll(/第\s*(\d{1,3})\s*张/gu)].map(match => Number(match[1])), allowed: forwardAllowed });
+        forwardedMessages.source={relation:source.relation??"recovery",sourceTime:source.sourceTime??null};
         // A selected forward replaces implicit previous-image context. Directly
         // attached images keep priority over the forward's sampled images.
         images = imageSegments(event.message);

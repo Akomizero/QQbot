@@ -601,6 +601,13 @@ async function getLlmReplyInternal({
     messages.push({ role: "system", content: buildSenderMetadataInstruction(senderQQId) });
     const targetInstruction = conversationTargetInstruction(messageContext);
     if (targetInstruction) messages.push({ role: "system", content: targetInstruction });
+    if (!proactive) messages.push({ role: "system", content: settings.forwardReadingEnabled === false
+      ? "本次QQ合并转发阅读开关关闭；这是当前设置，不代表QQ接口永久不支持。"
+      : "应用支持QQ合并转发展开及其中图片读取。没有关联到原转发、引用文字为空或本次图片读取失败，都不等于功能不支持或接口永远传不过来。只描述本次实际取得的材料和失败阶段；不能延续历史回复中‘转发图片一律看不了’的错误说法。没有来源就请用户引用原转发，不编造空数据或接口故障。" });
+    if (forwardedMessages) messages.push({ role: "system", content: "应用本次实际展开了QQ转发。已识别图片的visualReadings或实际附图是可用依据；不能因为最终请求未重复附原始图，就说一张图都没看到。引用正文为空不代表转发为空。图片未读成功时只说明本次读取结果，按notes区分下载和模型分析失败，不臆测接口不支持。source中的时间表示选中的原转发发送时间，若是较早记录可简短说明。\n" + JSON.stringify({
+      source:forwardedMessages.source,nodeCount:forwardedMessages.nodes.length,imageCount:forwardedMessages.imageCount,imagesRead:forwardedMessages.imagesRead,
+      batchPrepared:forwardedMessages.batchPrepared,notes:forwardedMessages.notes,
+    }) });
     const memoryInstruction = buildMemoryInstruction(settings);
     if (memoryInstruction) messages.push({ role: "system", content: memoryInstruction });
     if (groupId) {
