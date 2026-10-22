@@ -31,7 +31,7 @@ import { observeKnowledgeMessage, clearKnowledgeLearning } from "./knowledge-lea
 import { startMemoryMaintenance } from "./memory-maintenance.js";
 import { growthLearningStamp } from "./personality-growth.js";
 import { addLearnedSticker, approveStickerForSending, sendLlmResult, readSticker } from "./sticker-store.js";
-import { queueVisualCorrection } from "./visual-learning.js";
+import { queueVisualCorrection, noteVisualLearningMissingImage } from "./visual-learning.js";
 import { isVisualCorrectionText } from "./visual-memory-store.js";
 import { canLearnSticker, learnIncomingStickers, queuePendingStickerDescriptions, queueStickerDescription, stopStickerLearning } from "./sticker-learning.js";
 import { queueConversationReply, paceOneBotMessage, paceOneBotMessages } from "./reply-queue.js";
@@ -553,6 +553,7 @@ async function handleMessage(event, { sendMessage }, config) {
           loadImages: async () => correctionImages?.length ? readIncomingImages(correctionImages, sendMessage)
             : [await prepareNapCatImageBase64(readSticker(relatedStickerId, { approvedOnly: true }).bytes.toString("base64"), MAX_TOTAL_IMAGE_BYTES)] });
       } catch {}
+      else if (/(?:角色|人物|认错|不是.{1,40}(?:那|她|他|它|这|图)?.{0,4}是)/u.test(authorized.content)) noteVisualLearningMissingImage(authorized.groupId);
     }
     if (authorized.mentioned) {
       cancelPendingGroupTurn(authorized.groupId);

@@ -475,6 +475,7 @@ export async function startManagementServer({
         const requested = request.method === "GET" ? url.searchParams.get("groupId") : body?.groupId;
         const groupId = requested === "global" ? null : knowledgeScope(requested ?? undefined, { useDefault: true });
         if (request.method === "GET") sendJson(response, 200, { ...readVisualMemories(groupId), groupId, groups: readAccessControl().groupIds,
+          sharedReferences: groupId === null ? [] : readVisualMemories(null).entries.filter(entry => entry.status === "confirmed"),
           learningEnabled: readLlmSettings().visualMemoryLearningEnabled, learning: visualLearningStatus(groupId) });
         else if (["PUT", "DELETE"].includes(request.method)) sendJson(response, 200, { ...editVisualMemory(groupId, body?.entry ?? {}, body?.revision, request.method === "DELETE"), groupId, message: "角色视觉记忆已保存，下一次识图生效。" });
         else sendJson(response, 405, { error: "接口方法不支持。" });

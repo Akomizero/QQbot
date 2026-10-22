@@ -1461,7 +1461,7 @@ function renderVisualMemories() {
   const list = document.querySelector("#visual-list"), query = document.querySelector("#visual-filter").value.toLocaleLowerCase("zh-CN");
   const status = document.querySelector("#visual-filter-status").value;
   list.replaceChildren();
-  const entries = visualData.entries.filter(entry => (status === "all" || status === entry.status)
+  const entries = [...visualData.entries,...(visualData.sharedReferences ?? [])].filter(entry => (status === "all" || status === entry.status)
     && `${entry.name} ${entry.work} ${entry.traits.join(" ")}`.toLocaleLowerCase("zh-CN").includes(query));
   for (const entry of entries) {
     const card = document.createElement("article"); card.className = "command-card";
@@ -1490,6 +1490,11 @@ function renderVisualMemories() {
       details.append(label, refs); card.append(details);
     }
     const controls = document.createElement("div"); controls.className = "form-actions";
+    if (visualScope !== null && entry.groupId === null) {
+      const button=document.createElement("button");button.type="button";button.className="button button-quiet";button.textContent="管理通用参考";
+      button.addEventListener("click",()=>{visualScope=null;visualForm.hidden=true;visualDraft=null;void loadVisualMemories();});
+      controls.append(button);card.append(controls);list.append(card);continue;
+    }
     const actions = [["编辑", () => openVisualEditor(entry)]];
     if (entry.status !== "confirmed") actions.push(["确认并启用", () => { if (!entry.work) { openVisualEditor(entry); showToast("请先补充作品名，再确认启用。", true); return; } return mutateVisual({ ...entry, status: "confirmed" }); }]);
     if (entry.status === "confirmed") actions.push(["停用", () => mutateVisual({ ...entry, status: "disabled" })]);
@@ -1501,7 +1506,7 @@ function renderVisualMemories() {
     }
     card.append(controls); list.append(card);
   }
-  if (!entries.length) { const empty = document.createElement("p"); empty.className = "field-hint"; empty.textContent = "暂无符合条件的角色记忆。群友附图纠正后，候选会显示在这里。已有旧角色样例可切换到通用管理员参考查看。"; list.append(empty); }
+  if (!entries.length) { const empty = document.createElement("p"); empty.className = "field-hint"; empty.textContent = visualData.entries.length || visualData.sharedReferences?.length ? "当前筛选下没有匹配的角色记忆，可清空搜索或切换为全部状态。" : "本范围尚无角色记忆。附一张图或引用图片明确纠正角色后，处理状态会显示在上方；只有保存成功才会形成条目。"; list.append(empty); }
 }
 async function loadVisualMemories() {
   if (!visualForm.hidden) return;
@@ -1512,8 +1517,9 @@ async function loadVisualMemories() {
     visualScope = data.groupId; visualData = data;
     visualGroupSelect.replaceChildren(...[...data.groups.map(id => ({ value: id, text: `群 ${id}` })), { value: "global", text: "通用管理员参考（所有群）" }].map(item => { const option = document.createElement("option"); option.value = item.value; option.textContent = item.text; return option; }));
     visualGroupSelect.value = visualScope ?? "global";
-    const learning = { waiting: "等待新的角色纠正", queued: "纠正处理已排队", extracting: "正在提取角色标注", verifying: "正在查维基百科、读取资料并核对画面", "web-verified": "证据核对通过，已自动采用", "candidate-saved": "已保留待核实候选，可查看不足或冲突原因", duplicate: "已有相同标注，未重复添加", "no-correction": "没有可保存的明确角色纠正", "ambiguous-image": "图片不唯一，未自动绑定，请单独发图纠正", "unavailable-or-rejected": "本次内容检查或提炼未完成，未保存图片；可重新明确纠正" };
-    document.querySelector("#visual-status").textContent = `共${data.entries.length}条 · 待核实${data.entries.filter(entry => entry.status === "candidate").length}条 · 已启用${data.entries.filter(entry => entry.status === "confirmed").length}条 · ${learning[data.learning?.code] ?? "等待纠正"}${data.learningEnabled ? "" : " · 自动学习已关闭"}`;
+    const learning = { waiting: "等待新的角色纠正", queued: "纠正处理已排队", screening: "正在检查图片是否适合保存", extracting: "正在提取角色标注", verifying: "正在查维基百科、读取资料并核对画面", "web-verified": "证据核对通过，已自动采用", "candidate-saved": "已保留待核实候选，可查看不足或冲突原因", duplicate: "已有相同标注，未重复添加", "no-correction": "没有可保存的明确角色纠正", "ambiguous-image": "图片不唯一，未自动绑定，请单独发图纠正", "missing-image": "这次纠正未关联到图片，请附一张图或引用图片说明", "image-unavailable": "纠正图片读取未完成，未保存", "review-unavailable": "图片内容检查暂未完成，未保存", "content-rejected": "图片内容检查未通过，未保存", "extraction-unavailable": "角色标注模型请求未完成，未形成候选", "invalid-extraction": "模型未返回有效角色标注，未形成候选", "preview-unavailable": "图片预览或指纹处理未完成，未保存", "save-unavailable": "候选保存未完成，请检查本机数据目录", "verification-save-unavailable": "候选已保存，但核对结果写入未完成", cancelled: "配置或会话范围已变化，本次学习已取消", interrupted: "上次学习被服务重启中断，请重新附图纠正", "queue-full": "纠正队列暂满，请稍后重发", "unavailable-or-rejected": "本次内容检查或提炼未完成，未保存图片；可重新明确纠正" };
+    const scopeLabel=visualScope===null?"通用参考":"本群";
+    document.querySelector("#visual-status").textContent = `${scopeLabel}${data.entries.length}条 · 待核实${data.entries.filter(entry => entry.status === "candidate").length}条 · 已启用${data.entries.filter(entry => entry.status === "confirmed").length}条${visualScope!==null?` · 另有通用参考${data.sharedReferences?.length??0}条（已在下方显示）`:""} · ${visualScope===null?"群友纠正请切换到来源群查看":learning[data.learning?.code] ?? "等待纠正"}${data.learning?.at?` · 最近处理：${new Date(data.learning.at).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai"})}`:""}${data.learningEnabled ? "" : " · 自动学习已关闭"}`;
     renderVisualMemories();
   } catch (error) { document.querySelector("#visual-status").textContent = error.message; }
 }
