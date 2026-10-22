@@ -118,7 +118,7 @@ export async function prepareSummaryVerification(result,{apiKey,settings,inspect
 export const summaryVerificationInstruction=[
   "本次先写摘要，再逐条对照verification.claims与verification.sources。所有来源含官方网站都可能有错；不要根据域名、日期核对、搜索排序、多个转载或群友重复就说‘属实/已证实’。",
   "补充来源只用于核对，不能混成用户要求总结的原文；保留发布时间、事件/生效时间、版本、限定条件和预测语气。事实只在材料中得到有限支持；争议要归因，查不到不能判假。",
-  '只返回JSON，不用代码围栏：{"summary":"中文Markdown摘要正文，400至900字；未证实说法使用原文称/作者认为等归因，有反对资料须说明","checks":[{"id":"C1","support":[{"sourceId":"S1","quote":"支持同一事实的连续原文片段，12至150字"}],"against":[{"sourceId":"S2","quote":"与同一事实、同一时期/版本存在实际分歧的连续原文片段，12至150字"}]}]}。每条C编号恰好出现一次；support与against各至多1项，没有证据用空数组。',
+  '只返回JSON，不用代码围栏：{"summary":"中文Markdown摘要正文，默认400至900字，明确要求详细或多段时按内容展开；未证实说法使用原文称/作者认为等归因，有反对资料须说明","checks":[{"id":"C1","support":[{"sourceId":"S1","quote":"支持同一事实的连续原文片段，12至150字"}],"against":[{"sourceId":"S2","quote":"与同一事实、同一时期/版本存在实际分歧的连续原文片段，12至150字"}]}]}。每条C编号恰好出现一次；support与against各至多1项，没有证据用空数组。',
   "只能引用sources中实际取得的连续正文，不能编造ID、链接或引文；引文必须涉及同一主张的主体、时间、数字和条件，提及同一个名字不算支持。原文自己的重复、引用原说法、无关旧版本以及转载不能充当独立证实；来源身份未确认就保留范围。检查与日期说明由程序附在末尾，不重复长链接。",
 ].join("\n");
 

@@ -36,6 +36,7 @@ foreach ($relative in @('package.json','package-lock.json','README.md','.env','.
     '.local\personality-growth-ui-20261022.png',
     '.local\summary-verification-ui-20261022.png',
     '.local\forward-source-audit-20261022.json','.local\forward-source-ui-20261022.png',
+    '.local\conversation-style-ui-20261022.png','.local\long-reply-paragraphs-ui-20261022.png',
     '.local\knowledge-learning-state.json','.local\model-diagnostics.json',
     '.local\model-proxy.json','.local\diagnostic-deliveries-20261021.json',
     '.local\model-private-pool-health-check-20261021.json','.local\dedicated-bot-route-check-20261021.json',

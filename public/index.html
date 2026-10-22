@@ -283,11 +283,11 @@
               <div class="settings-field"><label>网页生图连接与任务</label><button type="button" id="refresh-chatgpt-imagegen" class="button button-quiet">查看生图状态</button><pre id="chatgpt-imagegen-status" class="diagnostic-output" role="status">点击查看，不会生成图片或发送消息。</pre></div>
               <div class="settings-field settings-toggle">
                 <label for="long-reply-forward-enabled"><input id="long-reply-forward-enabled" type="checkbox" checked>长回复使用合并转发卡片</label>
-                <p class="field-hint">群聊和私聊的长回复折叠进一张卡片，点击展开阅读；保留完整文字和随附表情。短回复照常发送。保存后生效。</p>
+                <p class="field-hint">群聊和私聊的长回复折叠进同一张卡片，点开后优先按主题段落显示多条消息，标题与后面的解释放在一起；保留文字和随附表情。500字是默认开始折叠的阈值，不是回复总字数上限。短回复照常发送。保存后生效。</p>
               </div>
               <div class="settings-field settings-toggle">
                 <label for="detailed-discussion-enabled"><input id="detailed-discussion-enabled" type="checkbox" checked>复杂问题展开分析与讨论</label>
-                <p class="field-hint">分析、对比或讨论时说明判断依据、前提、反例和不确定之处；允许更长回答。普通闲聊和主动接话仍然简短，说“一句话”或“只要结论”时收短。保存后生效。</p>
+                <p class="field-hint">分析、对比或讨论时说明判断依据、前提、例子和不确定之处；说“详细讲讲”“分成几段说明”或“长回复”时按内容展开并提高生成预算，不因500字折叠阈值收短。仍受模型单次输出额度影响。普通闲聊和主动接话保持简短，说“一句话”或“只要结论”时收短。保存后生效。</p>
               </div>
               <div class="settings-field settings-toggle">
                 <label for="content-summary-enabled"><input id="content-summary-enabled" type="checkbox" checked>读取网页并总结内容</label>
@@ -306,7 +306,7 @@
               <div class="settings-field">
                 <label for="long-reply-threshold">长回复折叠阈值（字）</label>
                 <input id="long-reply-threshold" type="number" min="100" max="3000" step="1" value="500" required>
-                <p class="field-hint">达到这个字数时折叠，默认 500，可设为 100～3000。NapCat 明确拒绝卡片时改用普通消息。</p>
+                <p class="field-hint">达到这个字数开始折叠，不会在这里截断回答。默认500，可设为100～3000；卡片内按自然段分条，过长单段再拆分。NapCat明确拒绝卡片时改用普通消息。</p>
               </div>
               <div class="settings-field settings-toggle">
                 <label for="search-enabled"><input id="search-enabled" type="checkbox">启用联网搜索与备用通道</label>
@@ -388,6 +388,7 @@
 
         <section class="settings-panel" id="page-personas" data-management-page="personas" role="tabpanel" aria-label="分群人设">
           <div class="settings-heading"><div><p class="eyebrow">GROUP PERSONAS</p><h2>分群人设</h2><p>为每个授权群分别设置角色、说话方式、昵称和记忆。普通回复、自然接话与主动聊天都会使用所在群的人设。</p></div></div>
+          <details class="settings-group" id="conversation-style-info"><summary>日常聊天的语气</summary><p class="field-hint">默认先回应内容，自然接玩笑和反馈，少急着拒绝、反驳或自辩。被指出漏看或说错时先核对并修正；有不同意见就说具体理由。确实需要拒绝时简短说明，不猜测对方在害她，也不编造接口限制。各群角色、记忆与成长仍独立，普通聊天不会为了显得温柔而句句道歉或附和。</p></details>
           <div class="settings-field persona-selector"><label for="persona-group">选择群</label><select id="persona-group"></select><p class="field-hint" id="persona-status" role="status">正在读取群人设…</p></div>
           <p class="field-hint" id="persona-empty" hidden>还没有授权群。先到「群与权限」添加群号，再来设置人设。</p>
           <form id="group-persona-form" hidden>

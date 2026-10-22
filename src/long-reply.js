@@ -1,15 +1,16 @@
 const nodeTextLimit = 1200;
+const paragraphTextLimit = 600;
 const maxForwardNodes = 50;
 
 // Keep every character (including paragraph breaks) and avoid splitting emoji pairs.
-function splitText(text) {
+function splitBoundedText(text, limit=nodeTextLimit) {
   const characters = Array.from(text);
   const chunks = [];
   let start = 0;
   while (start < characters.length) {
-    let end = Math.min(start + nodeTextLimit, characters.length);
+    let end = Math.min(start + limit, characters.length);
     if (end < characters.length) {
-      const lower = start + Math.floor(nodeTextLimit / 2);
+      const lower = start + Math.floor(limit / 2);
       let boundary = -1;
       for (let index = end - 1; index >= lower; index -= 1) {
         if (characters[index] === "\n") { boundary = index + 1; break; }
@@ -25,6 +26,38 @@ function splitText(text) {
     start = end;
   }
   return chunks;
+}
+
+// Prefer semantic paragraphs inside one forward. Preserve whitespace, keep a
+// heading with its following explanation and do not treat code's blank lines as
+// paragraph boundaries. Very long blocks still use the existing size bound.
+function splitText(text, availableNodes=maxForwardNodes) {
+  const blocks=[];let pending="",fence=null;
+  for(const line of text.match(/[^\n]*\n|[^\n]+$/gu)??[]) {
+    pending+=line;
+    const marker=line.match(/^ {0,3}(`{3,}|~{3,})/u)?.[1];
+    if(marker) {
+      if(!fence)fence=marker;
+      else if(marker[0]===fence[0]&&marker.length>=fence.length)fence=null;
+    }
+    if(!line.trim()&&!fence) {
+      if(pending.trim()){blocks.push(pending);pending="";}
+      else if(blocks.length){blocks[blocks.length-1]+=pending;pending="";}
+    }
+  }
+  if(pending)blocks.push(pending);
+  const sections=[];pending="";
+  for(const block of blocks) {
+    pending+=block;
+    const heading=block.trim();
+    if(/^(?:#{1,6}\s+[^\n]+|\*\*[^\n*]{1,70}\*\*[:：]?|【[^\n]{1,70}】)$/u.test(heading))continue;
+    sections.push(pending);pending="";
+  }
+  if(pending){if(sections.length)sections[sections.length-1]+=pending;else sections.push(pending);}
+  const chunks=sections.flatMap(section=>splitBoundedText(section,paragraphTextLimit));
+  // Too many short paragraphs must not turn a valid folded reply into a plain
+  // wall of text. Repack within the original node bounds without dropping text.
+  return chunks.length<=availableNodes?chunks:splitBoundedText(text);
 }
 
 export function buildLongReply(params, { settings, selfId } = {}) {
@@ -50,7 +83,7 @@ export function buildLongReply(params, { settings, selfId } = {}) {
   const nodes = [];
   let pendingText = "";
   const flushText = () => {
-    for (const chunk of splitText(pendingText)) {
+    for (const chunk of splitText(pendingText,maxForwardNodes-nodes.length)) {
       nodes.push({ type: "node", data: { user_id: selfId, nickname, content: [{ type: "text", data: { text: chunk } }] } });
     }
     pendingText = "";
