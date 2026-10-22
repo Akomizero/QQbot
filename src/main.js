@@ -35,7 +35,7 @@ import { queueVisualCorrection } from "./visual-learning.js";
 import { isVisualCorrectionText } from "./visual-memory-store.js";
 import { canLearnSticker, learnIncomingStickers, queuePendingStickerDescriptions, queueStickerDescription, stopStickerLearning } from "./sticker-learning.js";
 import { queueConversationReply, paceOneBotMessage, paceOneBotMessages } from "./reply-queue.js";
-import { sendReplyWithFolding, buildDirectReplyParts } from "./long-reply.js";
+import { sendReplyWithFolding, buildDirectReplyParts, buildLongReply } from "./long-reply.js";
 import { rememberGroupLine, warmGroupContext, isPossibleBotFollowup, recentGroupContext, clearGroupConversations, findGroupLine } from "./conversation-context.js";
 import { resolveMessageContext, messageReferences } from "./message-context.js";
 import { noteStickerFeedback } from "./sticker-preferences.js";
@@ -1078,7 +1078,16 @@ async function main() {
     memoryMaintenance = startMemoryMaintenance();
     replyRecovery = startReplyRecovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected,
       run: (job, allowed) => runRecoveredRequest(job, allowed, bridge.sendMessage, config),
-      pace:(action,params,sendAction,allowed)=>paceOneBotMessages(action,action==="send_msg"?buildDirectReplyParts(params):[params],sendAction,allowed) });
+      pace:(action,params,sendAction,allowed,selfId)=> {
+        if(action!=="send_msg")return sendAction(action,params);
+        const settings=settingsForGroup(readLlmSettings(),params.message_type==="group"?String(params.group_id):null);
+        // Forward cards cannot carry an outer reply quote. Keep the source in
+        // the recovery receipt; only omit that quote when a card can be built.
+        const withoutQuote={...params,message:Array.isArray(params.message)?params.message.filter(part=>part.type!=="reply"):params.message};
+        if(buildLongReply(withoutQuote,{settings,selfId}))return paceOneBotMessage(action,params,(_action,queued)=>
+          sendReplyWithFolding({...queued,message:withoutQuote.message},sendAction,{settings,selfId,allowed}),allowed);
+        return paceOneBotMessages(action,buildDirectReplyParts(params),sendAction,allowed);
+      } });
     videoDiscovery = startVideoDiscovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected, pace: paceOneBotMessage,
       onShared: ({ groupId, text, messageId }) => {
         rememberGroupLine({ groupId, userId: "bot", text, isBot: true, messageId });

@@ -532,7 +532,7 @@ function setLlmSettings(settings) {
   llmFields.temperature.value = settings.temperature;
   llmFields.maxTokens.value = settings.maxTokens;
   llmFields.modelRetryEnabled.checked = settings.modelRetryEnabled !== false;
-  llmFields.longReplyForwardEnabled.checked = settings.longReplyForwardEnabled === true;
+  llmFields.longReplyForwardEnabled.checked = settings.longReplyForwardEnabled !== false;
   llmFields.longReplyThreshold.value = settings.longReplyThreshold ?? 500;
   updateLongReplyMode();
   llmFields.detailedDiscussionEnabled.checked = settings.detailedDiscussionEnabled !== false;

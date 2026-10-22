@@ -84,7 +84,7 @@ export function startReplyRecovery({ sendAction, connected, run, pace }) {
         if (!allowed()) { job.state = "cancelled"; save(job); return; }
         if (!result || result.status !== "ok" || !result.reply?.trim()) { const error = new Error("Recovery result unavailable"); error.recoveryRetryable = result?.recoveryRetryable === true; throw error; }
         const sent = await sendRecoveredReply({ scope: job.scope, peerId: job.peerId, sourceMessageId: job.sourceMessageId, text: result.reply, selfId: job.selfId,
-          sendAction: (action, params, guard = allowed) => pace(action, params, sendAction, guard), allowed });
+          sendAction: (action, params, guard = allowed) => pace(action, params, sendAction, guard, job.selfId), allowed });
         job.state = sent?.cancelled ? "cancelled" : sent?.duplicate && !sent.message_id ? "uncertain" : "delivered";
         job.deliveredAt = Date.now(); save(job);
       } catch (error) {
