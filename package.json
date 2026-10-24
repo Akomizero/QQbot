@@ -11,7 +11,8 @@
     "start": "node src/launcher.js",
     "dev": "node src/launcher.js --watch",
     "web": "node src/management-only.js",
-    "test:p0": "node test/p0-isolated.mjs && node test/memory-privacy-regression.mjs",
+    "test:p0": "node test/p0-isolated.mjs && node test/memory-privacy-regression.mjs && node test/model-reliability-regression.mjs",
+    "test:model-reliability": "node test/model-reliability-regression.mjs",
     "test:memory-privacy": "node test/memory-privacy-regression.mjs"
   },
   "dependencies": {

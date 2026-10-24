@@ -232,6 +232,18 @@ function forwardReplyEnding(text) {
   return { visibleCutoff:openFence||dangling, completeShort:body.length>0&&Array.from(body).length<=800&&closed&&!openFence&&!dangling };
 }
 
+function retryAfterDelay(headers) {
+  const value = headers.get("retry-after");
+  if (value === null || !value.trim()) return { delayMs: 4000, retryable: true };
+  const seconds = Number(value);
+  const requested = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(value) - Date.now();
+  if (!Number.isFinite(requested) || requested < 0) return { delayMs: 4000, retryable: true };
+  // Never retry earlier than the server asks. If it exceeds this model step's
+  // retry window, surface the 429 and let the caller decide when to ask again.
+  if (requested > 15_000) return { delayMs: 4000, retryable: false };
+  return { delayMs: Math.max(4000, Math.ceil(requested)), retryable: true };
+}
+
 async function requestCompletionOnce({ apiKey, settings, messages, tools = null, maxTokens = settings.maxTokens, emptyRetry = true, retryState, forwardReply = false }) {
   assertMemoryGenerationCurrent();
   let response;
@@ -265,12 +277,12 @@ async function requestCompletionOnce({ apiKey, settings, messages, tools = null,
   }
 
   if (!response.ok) {
-    const retryAfterMs = Math.min(15000, Math.max(4000, (Number(response.headers.get("retry-after")) || 0) * 1000));
-    await response.body?.cancel();
+    const retryAfter = response.status === 429 ? retryAfterDelay(response.headers) : { delayMs: 4000, retryable: true };
+    await response.body?.cancel().catch(() => {});
     if (response.status === 401 || response.status === 403) {
       throw new LlmRequestError("模型服务拒绝了 API key，请管理员检查本机 .env 配置。", { code: "AUTH_REJECTED" });
     }
-    if (response.status === 429) throw new LlmRequestError("模型服务目前请求较多，请稍后再试。", { retryable: true, retryDelayMs: retryAfterMs, code: "RATE_LIMITED" });
+    if (response.status === 429) throw new LlmRequestError("模型服务目前请求较多，请稍后再试。", { retryable: retryAfter.retryable, retryDelayMs: retryAfter.delayMs, code: "RATE_LIMITED" });
     if (response.status === 400 || response.status === 404) {
       throw new LlmRequestError("模型名称或请求参数不受接口支持，请检查管理页中的模型设置。", { code: "PARAMETERS" });
     }

@@ -7,6 +7,7 @@ export function createModelConnectionPool({ create = createModelDispatcher, now 
   let sequence = 0, closed = false;
   const retire = entry => { if (entry?.dispatcher) void entry.dispatcher.close().catch(() => {}); };
   const invalidate = entry => {
+    if (!entry) return;
     if (entries.get(entry?.key) === entry) entries.delete(entry.key);
     retire(entry);
   };
