@@ -61,16 +61,17 @@ const dest=(groupId=G)=>({message_type:'group',group_id:groupId});
 const probe=createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(r=>probe.close(r));
 const bridge=(await load('onebot.js')).createOneBotBridge({port,path:'/p0-03',accessToken:'synthetic-local-p0-03'});await bridge.start();
 const ws=new WebSocket(`ws://127.0.0.1:${port}/p0-03`,{headers:{authorization:'Bearer synthetic-local-p0-03'}});await once(ws,'open');
-const packets=[];ws.on('message',bytes=>{const p=JSON.parse(bytes.toString());packets.push(p);onPacket(p);ws.send(JSON.stringify({status:'ok',retcode:0,echo:p.echo,data:{message_id:'synthetic-'+packets.length}}));});
+const packets=[];ws.on('message',bytes=>{const p=JSON.parse(bytes.toString());packets.push(p);const response=onPacket(p)??{};ws.send(JSON.stringify({status:'ok',retcode:0,echo:p.echo,data:{message_id:'synthetic-'+packets.length},...response}));});
 const checks=[];
 async function check(name,fn){try{await reset();await fn();checks.push({name,passed:true});console.log('PASS '+name);}catch(e){checks.push({name,passed:false,error:String(e.message).slice(0,240)});console.log('FAIL '+name+': '+String(e.message).slice(0,240));}}
-async function queued(result,mutation,{long=false}={}){
+async function queued(result,mutation,{long=false,destination=dest(),protectedText=groupMemory}={}){
+ assert(result.reply?.includes(protectedText),'fixture must generate an authorized reply before revocation');
  let now=0;const entered=deferred(),release=deferred();const c=queue.createReplyCoordinator({intervalMs:10,now:()=>now,sleep:async ms=>{entered.resolve();await release.promise;now+=ms;}});
- await c.send('send_msg',{...dest(),message:'安全队列占位。'},bridge.sendMessage);
+ await c.send('send_msg',{...destination,message:'安全队列占位。'},bridge.sendMessage);
  const start=packets.length;
- const task=store.sendLlmResult(result,dest(),(a,p,allowed)=>c.send(a,p,(qa,qp)=>long?fold.sendReplyWithFolding({...qp,foldLongReply:true},bridge.sendMessage,{settings:{longReplyForwardEnabled:true,longReplyThreshold:100},selfId:'710000031',allowed}):bridge.sendMessage(qa,qp),allowed));
- await waitFor(Promise.race([entered.promise,task.then(()=>{throw Error('Queue did not reach synthetic wait');})]));await mutation();release.resolve();await task;
- assert(!JSON.stringify(packets.slice(start)).includes(groupMemory),'queued transport disclosed stale source text');
+ const task=store.sendLlmResult(result,destination,(a,p,allowed)=>c.send(a,p,(qa,qp)=>long?fold.sendReplyWithFolding({...qp,foldLongReply:true},bridge.sendMessage,{settings:{longReplyForwardEnabled:true,longReplyThreshold:100},selfId:'710000031',allowed}):bridge.sendMessage(qa,qp),allowed));
+ await waitFor(Promise.race([entered.promise,task.then(()=>{throw Error('Queue did not reach synthetic wait');})]));try{await mutation();}finally{release.resolve();}await task;
+ assert(!JSON.stringify(packets.slice(start)).includes(protectedText),'queued transport disclosed stale source text');
 }
 try{
  await check('A scopes and repeated session switches are enforced in actual model requests',async()=>{
@@ -119,6 +120,7 @@ try{
   assert(!JSON.stringify(packets.slice(before)).includes(groupMemory));
  });
  await check('C queue delay revalidates deletion at actual OneBot send',async()=>{modelOutput=groupMemory;const r=await ask();await queued(r,()=>editGroup({memory:'',memoryReplyEnabled:false}));});
+ await check('C private queued reply is cancelled after its source memory is deleted',async()=>{modelOutput=privateMemory;const r=await ask(null,U);await queued(r,()=>config.writeLlmSettings({...config.readLlmSettings(),memory:'',memoryReplyUserIds:[]}),{destination:{message_type:'private',user_id:U},protectedText:privateMemory});});
  await check('C queue delay revalidates destination whitelist revocation',async()=>{modelOutput=groupMemory;const r=await ask();await queued(r,()=>access.writeAccessControl({groupIds:[H],userIds:[U,V]}));});
  await check('A removed group cannot supply memory to a new model request or direct send',async()=>{
   access.writeAccessControl({groupIds:[H],userIds:[U,V]});await ask();assert(!prompt().includes(groupMemory)&&!prompt().includes(fact)&&!prompt().includes(knowledge));
@@ -126,6 +128,13 @@ try{
  });
  await check('A removed private account cannot use a retained memory grant',async()=>{access.writeAccessControl({groupIds:[G,H],userIds:[V]});await ask(null,U);assert(!prompt().includes(privateMemory));});
  await check('C folded queue delay revalidates memory body replacement',async()=>{modelOutput=groupMemory+'安全长段。'.repeat(30);const r=await ask();await queued(r,()=>editGroup({memory:'改用合成的红色海豚迎宾仪式。',memoryReplyEnabled:false}),{long:true});});
+ await check('C forward rejection cannot fall back after consent is revoked',async()=>{
+  modelOutput=groupMemory;const r=await ask(),before=packets.length;
+  assert.equal(r.reply,groupMemory);
+  onPacket=p=>{if(p.action==='send_group_forward_msg'){editGroup({memory:'',memoryReplyEnabled:false});return{status:'failed',retcode:100};}};
+  await store.sendLlmResult(r,dest(),(a,p,allowed)=>fold.sendReplyWithFolding({...p,foldLongReply:true},bridge.sendMessage,{settings:{longReplyForwardEnabled:true,longReplyThreshold:100},selfId:'710000031',allowed}));
+  assert.equal(packets.length,before+1,'revoked forward must not be resent as a normal message');
+ });
  await check('C revoke then re-enable does not revive a queued reply',async()=>{modelOutput=groupMemory;const r=await ask();await queued(r,()=>{editGroup({memoryReplyEnabled:false});editGroup({memoryReplyEnabled:true});});});
  await check('C private grant revoke and re-enable invalidates a generated result',async()=>{
   modelOutput=privateMemory;const r=await ask(null,U);config.writeLlmSettings({...config.readLlmSettings(),memoryReplyUserIds:[]});config.writeLlmSettings({...config.readLlmSettings(),memoryReplyUserIds:[U]});const before=packets.length;
@@ -165,6 +174,10 @@ try{
   const p=profile();editGroup({memoryReplyEnabled:false});assert.throws(()=>personas.saveGroupPersona(G,p,p.revision,[G]),e=>e.statusCode===409);
   const d=members.readMemberImpressions(G);editMember({enabled:false});assert.throws(()=>members.saveMemberImpression(G,U,d.members[0],d.revision),e=>e.statusCode===409);
  });
+ await check('C stale knowledge revision cannot overwrite a newer disabled record',async()=>{
+  const entries=kb.readScopedKnowledge(G),revision=kb.knowledgeRevision(entries);kb.writeScopedKnowledge(G,entries.map(e=>({...e,enabled:false})),revision);
+  assert.throws(()=>kb.writeScopedKnowledge(G,entries,revision),e=>e.statusCode===409);assert.equal(kb.readScopedKnowledge(G)[0].enabled,false);
+ });
  await check('C authenticated HTTP settings writes reject stale consent without changing new state',async()=>{
   const auth=await load('admin-auth.js');const result=await auth.setupAdminPassword({socket:{remoteAddress:'127.0.0.1'},headers:{}},'synthetic-p0-03-password');
   let cookie;auth.setAdminSession({setHeader:(_k,v)=>cookie=v},result.record);cookie=String(cookie).split(';')[0];
@@ -177,6 +190,9 @@ try{
    assert.equal((await request('PUT',{settings:{memoryReplyUserIds:[]},revision:old.revision})).status,200);
    assert.equal((await request('PUT',{settings:old.settings,revision:old.revision})).status,409);
    assert.deepEqual((await request('GET')).data.settings.memoryReplyUserIds,[]);
+   const current=(await request('GET')).data;
+   const concurrent=await Promise.all([request('PUT',{settings:{memoryReplyUserIds:[U]},revision:current.revision}),request('PUT',{settings:{memoryReplyUserIds:[V]},revision:current.revision})]);
+   assert.deepEqual(concurrent.map(v=>v.status).sort(),[200,409]);
   }finally{await new Promise(r=>web.close(r));}
  });
  await check('C recovered reply keeps provenance through production recovery sender',async()=>{
