@@ -7,11 +7,11 @@ const day = 86400_000, stepInterval = 6 * 3600_000;
 // A bounded vocabulary controls expression, never identity, permissions or factual beliefs.
 export const growthHabits = {
   length: { label: "闲聊篇幅", values: {
-    concise: { label: "更简短", instruction: "普通闲聊更偏向一两句直接回应；具体问题仍按所需信息完整回答。", cue: /短点|简短(?:些|点|一点)|少说点|太长|别.{0,6}(?:长篇|小作文)|不用.{0,6}解释这么多/u },
-    detailed: { label: "更愿意展开", instruction: "有内容的话题可多补一两句理由或例子；不主动把闲聊写成报告。", cue: /详细点|详细一些|多说点|展开(?:说|点|些)|讲具体点|解释清楚点/u },
+    concise: { label: "更简短", instruction: "普通闲聊更偏向一两句直接回应；具体问题仍按所需信息完整回答。", cue: /短(?:一)?点|简短(?:些|点|一点)|少说点|回复.{0,8}(?:短|简洁|精简)(?:些|点|一点)?|太长|别.{0,6}(?:长篇|小作文)|不用.{0,6}解释这么多/u },
+    detailed: { label: "更愿意展开", instruction: "有内容的话题可多补一两句理由或例子；不主动把闲聊写成报告。", cue: /详细(?:点|一些|一点)|多说点|展开(?:说|一点|点|些)|讲具体点|解释清楚点/u },
   } },
   humor: { label: "玩笑习惯", values: {
-    playful: { label: "更会接玩笑", instruction: "轻松话题中可自然接一两句玩笑，避免复读固定梗，不嘲讽真人。", cue: /(?:你|肥鱼|鱼鱼).{0,12}(?:好笑|幽默|有梗)|笑死|哈哈.{0,10}(?:你|肥鱼)|多.{0,5}(?:开玩笑|玩梗)|就喜欢.{0,8}(?:玩笑|梗)/u },
+     playful: { label: "更会接玩笑", instruction: "轻松话题中可自然接一两句玩笑，避免复读固定梗，不嘲讽真人。", cue: /(?:你|肥鱼|鱼鱼).{0,12}(?:好{1,2}笑|幽默|有梗)|笑死|哈哈.{0,10}(?:你|肥鱼)|多.{0,5}(?:开玩笑|玩梗)|就喜欢.{0,8}(?:玩笑|梗)/u },
     restrained: { label: "更克制玩梗", instruction: "少插入玩笑和梗，优先接住对方正在说的内容；严肃话题认真回应。", cue: /(?:别|不要|少|不想).{0,8}(?:开玩笑|玩梗|抖机灵)|认真点|严肃点|不好笑|不幽默/u },
   } },
   tone: { label: "表达节奏", values: {
@@ -101,7 +101,9 @@ export function growthLearningStamp(groupId) {
   return { enabled: group.enabled, learningEnabled: group.learningEnabled, generation: group.generation };
 }
 export function hasGrowthFeedback(text) {
-  return typeof text === "string" && !/[?？]/u.test(text) && Object.values(growthHabits).some(dimension => Object.values(dimension.values).some(value => value.cue.test(text)));
+  // A clear request can be phrased as a question (for example, “能不能短一点？”).
+  // The multi-message evidence threshold below still prevents one request from changing group style.
+  return typeof text === "string" && Object.values(growthHabits).some(dimension => Object.values(dimension.values).some(value => value.cue.test(text)));
 }
 export function validateGrowthObservations(value, batch) {
   if (!Array.isArray(value)) return [];

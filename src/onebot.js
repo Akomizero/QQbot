@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
+import { protectOutbound, runtimePrivacyBoundary, outboundPrivacyScope } from "./privacy-boundary.js";
 
 // A get_image response may contain one GIF up to 20 MiB, before first-frame conversion.
 const maxPayloadBytes = 32 * 1024 * 1024;
@@ -82,7 +83,7 @@ function hasValidAuthorization(request, token) {
   return provided.length === expected.length && timingSafeEqual(provided, expected);
 }
 
-export function createOneBotBridge({ port, path, accessToken, onMessage, onStatus }) {
+export function createOneBotBridge({ port, path, accessToken, onMessage, onStatus, privacyBoundary = runtimePrivacyBoundary }) {
   const server = createServer();
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: maxPayloadBytes, perMessageDeflate: false });
   const pendingActions = new Map();
@@ -103,6 +104,8 @@ export function createOneBotBridge({ port, path, accessToken, onMessage, onStatu
     if (!client || client.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("OneBot WebSocket is not connected"));
     }
+    const checked = protectOutbound(action, params, privacyBoundary(outboundPrivacyScope(params)));
+    action = checked.action; params = checked.params;
 
     const echo = `codex-${++nextEcho}`;
     const hasOutgoingImage = action === "send_msg" && Array.isArray(params?.message) && params.message.some((segment) => segment?.type === "image");
@@ -113,7 +116,7 @@ export function createOneBotBridge({ port, path, accessToken, onMessage, onStatu
         pendingActions.delete(echo);
         reject(new Error("OneBot action timed out"));
       }, actionTimeoutMs);
-      pendingActions.set(echo, { resolve, reject, timer });
+      pendingActions.set(echo, { resolve, reject, timer, privacyBlocked: checked.blocked });
 
       try {
         client.send(JSON.stringify({ action, params, echo }), (error) => {
@@ -142,7 +145,7 @@ export function createOneBotBridge({ port, path, accessToken, onMessage, onStatu
       const pending = pendingActions.get(String(payload.echo));
       pendingActions.delete(String(payload.echo));
       clearTimeout(pending.timer);
-      if (payload.status === "ok" && payload.retcode === 0) pending.resolve(payload.data ?? null);
+      if (payload.status === "ok" && payload.retcode === 0) pending.resolve(pending.privacyBlocked ? { ...payload.data, privacyBlocked: true } : payload.data ?? null);
       else {
         const error = new Error("OneBot action failed");
         error.code = payload.status === "failed" ? "ONEBOT_ACTION_REJECTED" : "ONEBOT_ACTION_UNCONFIRMED";

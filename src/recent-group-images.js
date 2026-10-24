@@ -2,6 +2,7 @@ import { isNapCatImageFile, MAX_IMAGE_COUNT } from "./image-input.js";
 import { groupMemberContextSince } from "./member-impressions.js";
 import { messageReferences } from "./message-context.js";
 import { isVisualCorrectionText } from "./visual-memory-store.js";
+import { isExactImageReturnRequest } from './image-exchange.js';
 
 // Store platform file identifiers only. Image bytes are obtained on demand through
 // the existing get_image / validation path, never saved as conversation memory.
@@ -9,7 +10,7 @@ const groups = new Map();
 const ttl = 180_000, quoteTtl = 15 * 60_000;
 const validId = value => /^-?\d{1,32}$/u.test(String(value ?? ""));
 export function isImageFollowupText(text) {
-  return /(?:如何评价|评价一下|怎么看|看一下|看看|看下|这(?:个|张|幅).{0,8}(?:图|表情|角色)|(?:图片|图里|图中|图上|动图|gif)|这个(?:呢|是谁|是什么))/iu.test(text ?? "");
+  return isExactImageReturnRequest(text) || /(?:(?:刚才|前面|之前|这|那)(?:的)?(?:一|1)?张.{0,6}(?:是谁|叫什么|什么角色)|如何评价|评价一下|怎么看|看一下|看看|看下|这(?:个|张|幅).{0,8}(?:图|表情|角色)|(?:图片|图里|图中|图上|动图|gif)|这个(?:呢|是谁|是什么))/iu.test(text ?? "");
 }
 function cutoff(groupId, since) { return Math.max(since || 0, groupMemberContextSince(groupId)); }
 function stateFor(groupId, now = Date.now()) {

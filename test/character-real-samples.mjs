@@ -1,0 +1,36 @@
+// Explicitly opt-in real model sample check. Never sends QQ or chat histories.
+import assert from 'node:assert/strict';import{mkdir,mkdtemp,readFile,writeFile,copyFile}from'node:fs/promises';import{join}from'node:path';import{fileURLToPath,pathToFileURL}from'node:url';import{createHash}from'node:crypto';import sharp from'sharp';
+if(!process.argv.includes('--run-real'))throw Error('Pass --run-real only for explicitly authorized model testing');
+const root=fileURLToPath(new URL('../',import.meta.url)),fixture=await mkdtemp(join(root,'.local','character-real-20261024-'));
+for(const dir of['old/src','new/src','samples'])await mkdir(join(fixture,dir),{recursive:true});
+await writeFile(join(fixture,'package.json'),JSON.stringify({type:'module'}));
+const backup=join(root,'.local','character-ui-baseline-20261024-020314','src');
+for(const name of['character-vision.js','visual-memory-store.js']){await copyFile(join(backup,name),join(fixture,'old/src',name));await copyFile(join(root,'src',name),join(fixture,'new/src',name));}
+const old=await import(pathToFileURL(join(fixture,'old/src/character-vision.js'))),current=await import(pathToFileURL(join(fixture,'new/src/character-vision.js')));
+const {readLlmSettings}=await import('../src/llm-settings-store.js'),{getLlmApiKey}=await import('../src/config.js'),{fetchModel,closeModelConnections}=await import('../src/model-transport.js');
+const settings=readLlmSettings(),apiKey=getLlmApiKey();assert(apiKey);
+const samples=[],failures=[];const hash=b=>createHash('sha256').update(b).digest('hex');
+const add=async(id,bytes,label,source,labelKind)=>{bytes=await sharp(bytes).rotate().resize({width:900,height:900,fit:'inside',withoutEnlargement:true}).jpeg({quality:88}).toBuffer();await writeFile(join(fixture,'samples',id+'.jpg'),bytes);samples.push({id,bytes,dataUrl:'data:image/jpeg;base64,'+bytes.toString('base64'),label,source,labelKind,sha256:hash(bytes)});};
+for(const [id,url,label,page]of[
+ ['official-pikachu','https://hk.portal-pokemon.com/images/pokedex/2b3f6ff00db7a1efae21d85cfb8995eaff2da8d8.png',['皮卡丘','Pikachu'],'https://hk.portal-pokemon.com/play/pokedex/0025/'],
+ ['official-pichu','https://hk.portal-pokemon.com/images/pokedex/224892b2e43c31d5666f73bc6116d0e5719293d2.png',['皮丘','Pichu'],'https://hk.portal-pokemon.com/pokedex/0172/'],
+ ['official-zelda','https://www.nintendo.com/sg/switch/axn7/assets/img/character/chara_zelda_sp.webp',['塞尔达','萨尔达','ゼルダ','Zelda'],'https://www.nintendo.com/sg/switch/axn7/character/index.html'],
+ ['official-link','https://www.nintendo.com/sg/switch/axn7/assets/img/character/chara_link_sp.webp',['林克','リンク','Link'],'https://www.nintendo.com/sg/switch/axn7/character/index.html'],
+])try{const {createModelDispatcher}=await import('../src/network-proxy.js');const {dispatcher}=await createModelDispatcher(url);try{const r=await fetch(url,{...(dispatcher?{dispatcher}:{}),signal:AbortSignal.timeout(30000)});if(!r.ok)throw Error();await add(id,Buffer.from(await r.arrayBuffer()),label,page,'official-image-page');}finally{await dispatcher?.close();}}catch{failures.push({id,stage:'public-image-download'});}
+for(const [id,path,label]of[
+ ['user-labeled-role',process.env.FEIYU_TEST_ROLE_IMAGE,['达妮娅']],
+ ['user-custom-claude',process.env.FEIYU_TEST_CUSTOM_IMAGE,['Claude']],
+])try{await add(id,await readFile(path),label,'user-provided standalone fictional image','user-label-not-independent-official-verification');}catch{failures.push({id,stage:'local-sample-unavailable'});}
+const p=samples.find(s=>s.id==='official-pikachu'),q=samples.find(s=>s.id==='official-pichu');
+if(p&&q){const a=await sharp(p.bytes).resize(300,300,{fit:'contain',background:'#fff'}).toBuffer(),b=await sharp(q.bytes).resize(300,300,{fit:'contain',background:'#fff'}).toBuffer();const composed=await sharp({create:{width:600,height:300,channels:3,background:'#fff'}}).composite([{input:a,left:0,top:0},{input:b,left:300,top:0}]).jpeg().toBuffer();await add('two-official-characters',composed,['皮卡丘','Pikachu','皮丘','Pichu'],'derived contact sheet from the two official source images','official-source-derived-multi-character');}
+assert(samples.length>=2,'Need at least two authorized standalone samples');
+// Seed an unrelated legacy label to reproduce the production anchoring setup;
+// it is not supplied as ground truth or as a current-image match.
+for(const version of['old','new']){await mkdir(join(fixture,version,'data'));await writeFile(join(fixture,version,'data','character-references.json'),JSON.stringify({references:[{name:'达妮娅',work:'鸣潮',traits:['额前装饰','蓝白服装'],groupId:null,fingerprint:{sha256:'0'.repeat(64),dhash:'0'.repeat(16),colors:Array(24).fill(0)}}]}));}
+let calls=0;const payloads=[];
+const inspect=instruction=>async hints=>{calls++;const response=await fetchModel(settings.apiEndpoint,{method:'POST',headers:{authorization:'Bearer '+apiKey,'content-type':'application/json'},signal:AbortSignal.timeout(90000),modelRetries:false,body:JSON.stringify({model:settings.model,temperature:0,max_tokens:8192,messages:[{role:'system',content:instruction},{role:'user',content:[{type:'text',text:'逐图辨认虚构角色，没有真人或聊天记录。'+JSON.stringify(hints)},...samples.map(s=>({type:'image_url',image_url:{url:s.dataUrl,detail:'high'}}))]}]})});if(!response.ok){await response.body?.cancel();throw Error('REAL_MODEL_HTTP_FAILURE');}const result=await response.json();const content=result.choices?.[0]?.message?.content;assert.equal(typeof content,'string');payloads.push({finishReason:result.choices?.[0]?.finish_reason??null,usage:result.usage??null,hintNamesIncluded:JSON.stringify(hints).includes('达妮娅'),content});return content;};
+const outcomes={};try{for(const [version,vision]of[['baseline',old],['patched',current]])try{outcomes[version]=await vision.understandImageCharacters(samples.map(s=>s.dataUrl),{groupId:null,model:settings.model,inspect:inspect(vision.characterInspectionInstruction),...(version==='patched'?{confirm:inspect(vision.characterInspectionInstruction+' 独立复看，无上一轮名字或答案。')}:{} )});}catch{outcomes[version]={failure:'inspection-unavailable'};}
+const rows=samples.map((sample,i)=>{const a=outcomes.baseline.observations?.find(r=>r.index===i+1),b=outcomes.patched.observations?.find(r=>r.index===i+1),d=outcomes.patched.decisions?.find(r=>r.index===i+1);return{id:sample.id,label:sample.label,labelKind:sample.labelKind,source:sample.source,sha256:sample.sha256,baseline:a??null,patched:b??null,decision:d??null,final:outcomes.patched.decisions?current.renderCharacterIdentity({...outcomes.patched,decisions:[d]}):'unavailable'};});
+const report={at:new Date().toISOString(),fixture,realModelRequests:calls,qqMessages:0,privateChatTextUploaded:false,rows,failures,payloads,outcomes,
+ caveats:['small nonrandom sample, no aggregate accuracy improvement claim','user labels are annotations, not independent external truth','candidate identification and unknown are reported separately from definite correct identification','no actual costume-variant or real QQ incoming-event accuracy study']};await writeFile(join(fixture,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({fixture,realModelRequests:calls,samples:rows.map(r=>({id:r.id,baseline:r.baseline?.characters,patched:r.patched?.characters,decision:r.decision?.state,final:r.final})),failures}));
+}finally{await closeModelConnections();}

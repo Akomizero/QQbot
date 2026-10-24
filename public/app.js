@@ -11,15 +11,25 @@ const llmSettingsError = document.querySelector("#llm-settings-error");
 const accessControlForm = document.querySelector("#access-control-form");
 const accessControlError = document.querySelector("#access-control-error");
 const apiKeyStatus = document.querySelector("#api-key-status");
-const tavilyKeyStatus = document.querySelector("#tavily-key-status");
+const searchKeyStatus = document.querySelector("#search-key-status");
 const serperKeyInput = document.querySelector("#serper-api-key");
 const clearSerperKey = document.querySelector("#clear-serper-api-key");
+const tavilyKeyInput = document.querySelector("#tavily-api-key");
+const clearTavilyKey = document.querySelector("#clear-tavily-api-key");
+const overviewOneBot = document.querySelector("#overview-onebot");
+const overviewModel = document.querySelector("#overview-model");
+const overviewSearch = document.querySelector("#overview-search");
+const settingsSaveStatus = document.querySelector("#settings-save-status");
 function setSearchKeyStatus(data) {
   const serper = data.settings.searchProvider === "serper";
   const configured = serper ? data.serperApiKeyConfigured : data.searchApiKeyConfigured;
-  tavilyKeyStatus.textContent = serper ? `Serper ${configured ? "已配置 · Google 统一检索" : "未配置密钥"}` : `Tavily ${configured ? "已配置" : "未配置"} · Exa / B站备用`;
-  tavilyKeyStatus.classList.toggle("key-configured", Boolean(configured));
-  tavilyKeyStatus.classList.toggle("key-missing", !configured);
+  const providerName = serper ? "Serper" : "Tavily";
+  searchKeyStatus.textContent = serper ? `Serper ${configured ? "已配置 · Google 统一检索" : "未配置密钥"}` : `Tavily ${configured ? "已配置" : "未配置"} · Exa / B站备用`;
+  searchKeyStatus.classList.toggle("key-configured", Boolean(configured));
+  searchKeyStatus.classList.toggle("key-missing", !configured);
+  overviewSearch.textContent = configured ? `${providerName} 已配置` : `${providerName} 未配置密钥`;
+  overviewSearch.closest(".overview-card").classList.toggle("overview-ready", Boolean(configured));
+  overviewSearch.closest(".overview-card").classList.toggle("overview-warning", !configured);
 }
 const onebotStatus = document.querySelector("#onebot-status");
 const llmApiKeyInput = document.querySelector("#llm-api-key");
@@ -45,6 +55,7 @@ const llmFields = {
   personality: document.querySelector("#llm-personality"),
   expressionStyle: document.querySelector("#llm-expression-style"),
   memory: document.querySelector("#llm-memory"),
+  memoryReplyUserIds: document.querySelector('#llm-memory-users'),
   knowledgeEnabled: document.querySelector("#knowledge-enabled"),
   knowledgeLearningEnabled: document.querySelector("#knowledge-learning-enabled"),
   memberImpressionsEnabled: document.querySelector("#member-impressions-enabled"),
@@ -123,6 +134,23 @@ let toastTimer;
 let oneBotStatusTimer;
 let llmApiKeyConfigured = false;
 let availableModelIds = [];
+const immediateSettingIds = new Set([
+  "knowledge-enabled", "knowledge-learning-enabled", "member-impressions-enabled",
+  "member-impressions-learning-enabled", "stickers-enabled", "sticker-learning-enabled",
+  "visual-memory-learning-enabled",
+]);
+
+function setSettingsDirty(dirty) {
+  settingsSaveStatus.textContent = dirty ? "有尚未保存的修改" : "当前设置已保存";
+  settingsSaveStatus.classList.toggle("save-state-dirty", dirty);
+}
+
+function trackSettingsEdit(event) {
+  if (!immediateSettingIds.has(event.target.id)) setSettingsDirty(true);
+}
+
+llmSettingsForm.addEventListener("input", trackSettingsEdit);
+llmSettingsForm.addEventListener("change", trackSettingsEdit);
 
 async function requestAdminApi(url, options = {}) {
   const response = await fetch(url, { ...options, credentials: "same-origin", cache: "no-store" });
@@ -176,12 +204,18 @@ async function refreshOneBotStatus() {
     onebotStatus.textContent = connected ? "NapCat OneBot 已连接" : "NapCat OneBot 未连接";
     onebotStatus.classList.toggle("key-configured", connected);
     onebotStatus.classList.toggle("key-missing", !connected);
+    overviewOneBot.textContent = connected ? "已连接，可以收发" : "未连接，等待 QQ";
+    overviewOneBot.closest(".overview-card").classList.toggle("overview-ready", connected);
+    overviewOneBot.closest(".overview-card").classList.toggle("overview-warning", !connected);
     if (typeof data.status?.wsEndpoint === "string") {
       document.querySelector("#onebot-endpoint").textContent = data.status.wsEndpoint;
     }
   } catch {
     onebotStatus.textContent = "NapCat OneBot 状态不可用";
     onebotStatus.classList.add("key-missing");
+    overviewOneBot.textContent = "状态暂不可用";
+    overviewOneBot.closest(".overview-card").classList.remove("overview-ready");
+    overviewOneBot.closest(".overview-card").classList.add("overview-warning");
   }
 }
 
@@ -270,6 +304,8 @@ function openEditor(command) {
   fields.id.value = command.id;
   fields.name.value = command.name;
   fields.aliases.value = command.aliases.join(", ");
+  document.querySelector("#command-template-field").hidden = true;
+  for(const option of fields.type.options) if(["time","dice"].includes(option.value)) option.hidden = option.value !== command.type;
   fields.type.value = command.type;
   fields.reply.value = command.reply;
   document.querySelector("#delete-command").hidden = false;
@@ -279,7 +315,18 @@ function openEditor(command) {
   renderCommands();
 }
 
+document.querySelector("#command-template").addEventListener("change",event=>{
+  const template=event.target.value;
+  fields.type.value='text';
+  if(template==='time'){fields.name.value='时间';fields.reply.value='现在是 {{time}}。';}
+  else if(template==='dice'){fields.name.value='骰子';fields.reply.value='掷出了 {{dice}} 点。';}
+  else {fields.name.value='';fields.reply.value='';}
+  updateTypeHint();
+});
 function openNewEditor() {
+  document.querySelector("#command-template-field").hidden = false;
+  document.querySelector("#command-template").value='blank';
+  for(const option of fields.type.options)if(['time','dice'].includes(option.value))option.hidden=true;
   selectedId = null;
   editorTitle.textContent = "新建指令";
   editorSubtitle.textContent = "设置一个触发词和机器人回复。";
@@ -424,6 +471,8 @@ form.addEventListener("submit", async (event) => {
 llmSettingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   llmSettingsError.hidden = true;
+  const submitButton = event.submitter ?? llmSettingsForm.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
   const settings = {
     apiEndpoint: llmFields.apiEndpoint.value.trim(),
     model: llmFields.model.value.trim(),
@@ -431,6 +480,7 @@ llmSettingsForm.addEventListener("submit", async (event) => {
     personality: llmFields.personality.value,
     expressionStyle: llmFields.expressionStyle.value,
     memory: llmFields.memory.value,
+    memoryReplyUserIds: llmFields.memoryReplyUserIds.value.split(/[,，、\s]+/u).filter(Boolean),
     knowledgeEnabled: llmFields.knowledgeEnabled.checked,
     knowledgeLearningEnabled: llmFields.knowledgeLearningEnabled.checked,
     visualMemoryLearningEnabled: llmFields.visualMemoryLearningEnabled.checked,
@@ -480,7 +530,9 @@ llmSettingsForm.addEventListener("submit", async (event) => {
         settings,
         ...(apiKey ? { apiKey } : {}),
         ...(serperKeyInput.value.trim() ? { serperApiKey: serperKeyInput.value.trim() } : {}),
+        ...(tavilyKeyInput.value.trim() ? { tavilyApiKey: tavilyKeyInput.value.trim() } : {}),
         ...(clearSerperKey.checked ? { clearSerperApiKey: true } : {}),
+        ...(clearTavilyKey.checked ? { clearTavilyApiKey: true } : {}),
         ...(clearLlmApiKey.checked ? { clearApiKey: true } : {}),
       }),
     });
@@ -488,6 +540,10 @@ llmSettingsForm.addEventListener("submit", async (event) => {
     setSearchKeyStatus(data);
     serperKeyInput.value = "";
     clearSerperKey.checked = false;
+    serperKeyInput.disabled = false;
+    tavilyKeyInput.value = "";
+    clearTavilyKey.checked = false;
+    tavilyKeyInput.disabled = false;
     llmApiKeyInput.value = "";
     clearLlmApiKey.checked = false;
     llmApiKeyInput.disabled = false;
@@ -498,10 +554,13 @@ llmSettingsForm.addEventListener("submit", async (event) => {
     localConfigCheck.textContent = data.apiKeyUpdated
       ? "设置已保存；服务端只返回 key 配置状态，没有回显 key。"
       : "设置已保存；未更换现有 API key。";
+    setSettingsDirty(false);
     showToast(data.message);
   } catch (error) {
     llmSettingsError.textContent = error.message;
     llmSettingsError.hidden = false;
+  } finally {
+    submitButton.disabled = false;
   }
 });
 
@@ -510,6 +569,14 @@ function updateLongReplyMode() {
 }
 llmFields.longReplyForwardEnabled.addEventListener("change",updateLongReplyMode);
 
+function updateSearchProviderFields() {
+  const provider = llmFields.searchProvider.value;
+  for (const field of document.querySelectorAll("[data-search-provider-field]")) {
+    field.hidden = field.dataset.searchProviderField !== provider;
+  }
+}
+llmFields.searchProvider.addEventListener("change", updateSearchProviderFields);
+
 function setLlmSettings(settings) {
   llmFields.apiEndpoint.value = settings.apiEndpoint;
   renderModelOptions(settings.model, availableModelIds);
@@ -517,6 +584,7 @@ function setLlmSettings(settings) {
   llmFields.personality.value = settings.personality;
   llmFields.expressionStyle.value = settings.expressionStyle;
   llmFields.memory.value = settings.memory ?? "";
+  llmFields.memoryReplyUserIds.value = (settings.memoryReplyUserIds ?? []).join('、');
   llmFields.knowledgeEnabled.checked = settings.knowledgeEnabled !== false;
   llmFields.knowledgeLearningEnabled.checked = settings.knowledgeLearningEnabled !== false;
   llmFields.visualMemoryLearningEnabled.checked = settings.visualMemoryLearningEnabled !== false;
@@ -539,6 +607,7 @@ function setLlmSettings(settings) {
   llmFields.contentSummaryEnabled.checked = settings.contentSummaryEnabled !== false;
   llmFields.summaryOutput.value = settings.summaryOutput ?? "forward";
   llmFields.searchProvider.value = settings.searchProvider;
+  updateSearchProviderFields();
   llmFields.searchCountry.value = settings.searchCountry;
   llmFields.searchLanguage.value = settings.searchLanguage;
   llmFields.searchEnabled.checked = settings.searchEnabled;
@@ -556,6 +625,7 @@ function setLlmSettings(settings) {
   llmFields.proactiveFrequencyMinutes.value = settings.proactiveFrequencyMinutes;
   llmFields.proactiveDebounceSeconds.value = settings.proactiveDebounceSeconds;
   llmFields.proactiveDailyLimit.value = settings.proactiveDailyLimit;
+  setSettingsDirty(false);
 }
 
 function renderModelOptions(currentModel, discoveredModelIds) {
@@ -596,6 +666,9 @@ function setApiKeyStatus(configured) {
   apiKeyStatus.textContent = configured ? "服务端 API key 已配置" : "服务端 API key 未配置";
   apiKeyStatus.classList.toggle("key-configured", configured);
   apiKeyStatus.classList.toggle("key-missing", !configured);
+  overviewModel.textContent = configured ? "模型密钥已配置" : "模型密钥未配置";
+  overviewModel.closest(".overview-card").classList.toggle("overview-ready", configured);
+  overviewModel.closest(".overview-card").classList.toggle("overview-warning", !configured);
 }
 
 function validateLocalApiEndpoint(value) {
@@ -616,6 +689,15 @@ clearLlmApiKey.addEventListener("change", () => {
   if (clearLlmApiKey.checked) llmApiKeyInput.value = "";
   llmApiKeyInput.disabled = clearLlmApiKey.checked;
 });
+
+function bindClearKey(control, input) {
+  control.addEventListener("change", () => {
+    if (control.checked) input.value = "";
+    input.disabled = control.checked;
+  });
+}
+bindClearKey(clearSerperKey, serperKeyInput);
+bindClearKey(clearTavilyKey, tavilyKeyInput);
 
 checkLocalConfigButton.addEventListener("click", () => {
   if (!validateLocalApiEndpoint(llmFields.apiEndpoint.value.trim())) {
@@ -666,8 +748,10 @@ async function loadManagementData() {
   } catch (error) {
     apiKeyStatus.textContent = "模型设置读取失败";
     apiKeyStatus.classList.add("key-missing");
-    tavilyKeyStatus.textContent = "搜索设置读取失败";
-    tavilyKeyStatus.classList.add("key-missing");
+    searchKeyStatus.textContent = "搜索设置读取失败";
+    searchKeyStatus.classList.add("key-missing");
+    overviewSearch.textContent = "搜索设置读取失败";
+    overviewSearch.closest(".overview-card").classList.add("overview-warning");
     llmSettingsError.textContent = error.message;
     llmSettingsError.hidden = false;
   }
@@ -764,6 +848,7 @@ const personaFields = {
   label: document.querySelector("#persona-label"), enabled: document.querySelector("#persona-enabled"),
   botAliases: document.querySelector("#persona-aliases"), personality: document.querySelector("#persona-personality"),
   expressionStyle: document.querySelector("#persona-style"), memory: document.querySelector("#persona-memory"),
+  memoryReplyEnabled: document.querySelector('#persona-memory-reply'),
   systemPrompt: document.querySelector("#persona-system-prompt"),
 };
 let groupPersonas = [];
@@ -780,7 +865,7 @@ function showSelectedPersona() {
   personaDirty = false;
   if (!profile) { document.querySelector("#personality-growth-panel").hidden = true; personaStatus.textContent = "没有可配置的授权群。"; return; }
   for (const [key, field] of Object.entries(personaFields)) {
-    if (key === "enabled") field.checked = profile.enabled;
+    if (key === "enabled" || key === 'memoryReplyEnabled') field.checked = profile[key] === true;
     else field.value = key === "botAliases" ? profile.botAliases.join("、") : profile[key];
   }
   document.querySelector("#persona-values").disabled = !profile.enabled;
@@ -829,6 +914,7 @@ document.querySelector("#copy-default-persona").addEventListener("click", () => 
     personaFields[key].value = key === "memory" ? "" : key === "botAliases" ? personaDefaults[key].join("、") : personaDefaults[key];
   }
   personaFields.enabled.checked = true;
+  personaFields.memoryReplyEnabled.checked = false;
   document.querySelector("#persona-values").disabled = false;
   personaDirty = true;
   personaStatus.textContent = `群 ${selectedPersonaId} · 默认模板已填入，本群记忆为空，保存后生效`;
@@ -840,7 +926,7 @@ personaForm.addEventListener("submit", async (event) => {
   const profile = { label: personaFields.label.value, enabled: personaFields.enabled.checked,
     botAliases: personaFields.botAliases.value.split(/[,，、\n]+/u).map((name) => name.trim()).filter(Boolean),
     personality: personaFields.personality.value, expressionStyle: personaFields.expressionStyle.value,
-    memory: personaFields.memory.value, systemPrompt: personaFields.systemPrompt.value };
+    memory: personaFields.memory.value, memoryReplyEnabled: personaFields.memoryReplyEnabled.checked, systemPrompt: personaFields.systemPrompt.value };
   const button = document.querySelector("#save-persona"); button.disabled = true; personaSelect.disabled = true; personaError.hidden = true;
   try {
     const data = await requestAdminApi(`/api/group-personas/${current.groupId}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ profile, revision: current.revision }) });
@@ -932,7 +1018,7 @@ const knowledgeFields = {
 function renderKnowledge() {
   const candidateCount = knowledgeEntries.filter(entry => !entry.archivedAt && entry.reviewStatus === "candidate").length;
   document.querySelector("#knowledge-count").textContent = `${knowledgeEntries.length} 条知识，${knowledgeEntries.filter((entry) => entry.enabled).length} 条已启用，${candidateCount} 条待确认`;
-  document.querySelector("#show-knowledge-candidates").textContent = `查看待确认知识（${candidateCount}）`;
+  document.querySelector('#knowledge-origin-filter option[value="candidate"]').textContent = `待确认（${candidateCount}）`;
   knowledgeList.replaceChildren();
   if (!knowledgeEntries.length) {
     const empty = document.createElement("p");
@@ -981,7 +1067,7 @@ function renderKnowledge() {
       const related = document.createElement("button"); related.type = "button"; related.className = "button button-quiet"; related.textContent = "查看关联表情";
       related.addEventListener("click", async () => {
         try { selectedStickerPreferenceGroup = selectedKnowledgeGroup; document.querySelector('[data-page="stickers"]').click(); await loadStickers();
-          const sticker = stickers.find(item => entry.relatedStickerIds.includes(item.id) && (!item.groupId || item.groupId === selectedKnowledgeGroup));
+          const sticker = stickers.find(item => entry.relatedStickerIds.includes(item.id) && item.origin !== 'private' && (!item.groupId || item.groupId === selectedKnowledgeGroup));
           if (sticker) openStickerEditor(sticker); else showToast("关联表情已删除或不属于当前群。", true);
         } catch (error) { showToast(error.message, true); }
       }); card.append(related);
@@ -1029,6 +1115,7 @@ async function loadKnowledge({ force = false } = {}) {
   if (!force && !knowledgeForm.hidden) return;
   const sequence = ++knowledgeLoadSequence;
   try {
+    if(selectedKnowledgeGroup===undefined && selectedMemberGroup)selectedKnowledgeGroup=selectedMemberGroup;
     const suffix = selectedKnowledgeGroup === undefined ? "" : `?groupId=${encodeURIComponent(selectedKnowledgeGroup ?? "private")}`;
     const data = await requestAdminApi("/api/knowledge" + suffix);
     if (sequence !== knowledgeLoadSequence) return;
@@ -1037,7 +1124,7 @@ async function loadKnowledge({ force = false } = {}) {
       const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
     }));
     knowledgeGroupSelect.value = data.groupId ?? "private";
-    document.querySelector("#extract-knowledge").disabled = data.groupId === null;
+    updateDialogueTask(data.groupId, data.learning?.groups?.find(g=>g.groupId===data.groupId));
     knowledgeEntries = data.entries;
     knowledgeMaintenance = data.maintenance;
     renderMemoryMaintenance("knowledge", data.maintenance);
@@ -1056,6 +1143,7 @@ async function loadKnowledge({ force = false } = {}) {
   } catch (error) {
     if (sequence !== knowledgeLoadSequence) return;
     if (error.status === 404 && selectedKnowledgeGroup !== undefined && knowledgeForm.hidden) {
+      if(selectedMemberGroup===selectedKnowledgeGroup)selectedMemberGroup="";
       selectedKnowledgeGroup = undefined;
       await loadKnowledge();
       return;
@@ -1083,13 +1171,8 @@ async function saveKnowledge(entries) {
 }
 
 document.querySelector("#add-knowledge").addEventListener("click", () => openKnowledgeEditor());
-document.querySelector("#show-knowledge-candidates").addEventListener("click", () => { document.querySelector("#knowledge-origin-filter").value = "candidate"; renderKnowledge(); });
-document.querySelector("#extract-knowledge").addEventListener("click", async (event) => {
-  const button = event.currentTarget; button.disabled = true;
-  try { const data = await requestAdminApi("/api/knowledge/learn", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId: selectedKnowledgeGroup }) }); showToast(data.message); await loadKnowledge(); }
-  catch (error) { showToast(error.message, true); }
-  finally { button.disabled = false; }
-});
+document.querySelector("#extract-knowledge").addEventListener("click",()=>void startDialogueLearning(selectedKnowledgeGroup));
+
 document.querySelector("#cancel-knowledge").addEventListener("click", () => { knowledgeForm.hidden = true; void loadKnowledge(); });
 knowledgeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1131,7 +1214,8 @@ document.querySelector("#knowledge-filter").addEventListener("input", renderKnow
 document.querySelector("#knowledge-origin-filter").addEventListener("change", renderKnowledge);
 knowledgeGroupSelect.addEventListener("change", async () => {
   if (!knowledgeForm.hidden) { knowledgeGroupSelect.value = selectedKnowledgeGroup ?? "private"; showToast("先保存或取消当前条目的编辑，再切换群。", true); return; }
-  selectedKnowledgeGroup = knowledgeGroupSelect.value === "private" ? null : knowledgeGroupSelect.value;
+  const group=knowledgeGroupSelect.value === "private" ? null : knowledgeGroupSelect.value;
+  if(!selectMemoryGroup(group)){knowledgeGroupSelect.value=selectedKnowledgeGroup??"private";return;}
   knowledgeEntries = []; knowledgeRevisionValue = "";
   document.querySelector("#knowledge-results").hidden = true;
   renderKnowledge();
@@ -1139,6 +1223,7 @@ knowledgeGroupSelect.addEventListener("change", async () => {
 });
 
 let stickers = [];
+let stickerLearning = [];
 let stickerPreviewUrl = null;
 let stickerRefreshTimer = null;
 const stickerForm = document.querySelector("#sticker-form");
@@ -1186,7 +1271,7 @@ document.querySelector("#add-sticker-block-term").addEventListener("click", asyn
 });
 
 async function loadStickers() {
-  try { stickers = (await requestAdminApi("/api/stickers")).stickers; await loadStickerPreferences(); renderStickers(); }
+  try { const data = await requestAdminApi("/api/stickers"); stickers = data.stickers; stickerLearning = data.learning ?? []; await loadStickerPreferences(); renderStickers(); }
   catch (error) { document.querySelector("#sticker-count").textContent = error.message; }
   finally {
     clearTimeout(stickerRefreshTimer);
@@ -1200,13 +1285,15 @@ function renderStickers() {
   const list = document.querySelector("#sticker-list");
   list.replaceChildren();
   document.querySelector("#sticker-count").textContent = stickers.length ? `${stickers.length} 张表情，${stickers.filter((entry) => entry.enabled).length} 张启用，${stickers.filter((entry) => entry.origin === "group").length} 张从群聊学来` : "还没有表情包。可以上传，也可以等 bot 从群友发来的 GIF 或 QQ 表情里学习收藏。";
+  const learningCodes = { "group-count": "本群容量已满", "library-count": "全库数量已满", "learned-count": "自动收藏数量已满", "library-bytes": "全库空间已满", reviewing: "检查中", saved: "最近已收藏", "not-qq-sticker-or-gif": "普通图片未自动收藏", "image-load-or-review-failed": "图片读取或检查失败", "review-or-save-failed": "检查或保存失败", "content-rejected": "内容检查未通过", "cooldown-or-daily-limit": "等待学习间隔或今日判断额度", "no-new-candidate": "没有新候选", "not-reusable-or-capacity": "不适合收藏或容量不足" };
+  if (stickerLearning.length) document.querySelector("#sticker-count").textContent += " · " + stickerLearning.map(s => `群${s.groupId} ${s.count}/${s.limit}，今日判断${s.checksToday}/${s.dailyLimit}，${learningCodes[s.allowed ? s.last?.code : s.reason] ?? "等待合适的新表情"}`).join("；");
   for (const sticker of stickers) {
     const card = document.createElement("article"); card.className = "sticker-card";
     const image = document.createElement("img"); if (sticker.reviewStatus === "approved") image.src = `/api/stickers/${sticker.id}/image`; image.alt = sticker.reviewStatus === "approved" ? sticker.title : "内容检查中，暂不展示"; image.loading = "lazy";
     const title = document.createElement("p"); title.textContent = (sticker.enabled ? "" : "[停用] ") + sticker.title;
     const tags = document.createElement("p"); tags.className = "field-hint"; tags.textContent = sticker.tags.join("、") || "建议补充情绪或场景关键词";
     const source = document.createElement("p"); source.className = "field-hint";
-    source.textContent = (sticker.origin === "group" ? `群聊学会 · 仅群 ${sticker.groupId}` : "手动上传 · 通用表情")
+    source.textContent = (sticker.origin === "group" ? `群聊学会 · 仅群 ${sticker.groupId}` : sticker.origin === 'private' ? `私聊赠送 · 仅账号 ${sticker.userId}` : "手动上传 · 通用表情")
       + (sticker.needsDescription ? " · 正在学习用途" : "")
       + (sticker.reviewStatus === "approved" ? " · 内容已检查" : " · 内容待检查，暂不发送")
       + (sticker.firstFrameOnly ? " · 收藏静态首帧" : sticker.animationReduced ? " · 动画已压缩" : "");
@@ -1216,7 +1303,7 @@ function renderStickers() {
     const remove = document.createElement("button"); remove.type = "button"; remove.className = "button button-danger-text"; remove.textContent = "删除";
     remove.addEventListener("click", async () => { if (!window.confirm(`删除“${sticker.title}”表情？`)) return; try { await requestAdminApi(`/api/stickers/${sticker.id}`, { method: "DELETE" }); if (stickerFields.id.value === sticker.id) stickerForm.hidden = true; await loadStickers(); } catch (error) { showToast(error.message, true); } });
     card.append(image, title, tags, source, usage, avoid, edit, remove); list.append(card);
-    if (selectedStickerPreferenceGroup && (!sticker.groupId || sticker.groupId === selectedStickerPreferenceGroup)) {
+    if (selectedStickerPreferenceGroup && sticker.origin !== 'private' && (!sticker.groupId || sticker.groupId === selectedStickerPreferenceGroup)) {
       const blocked = stickerPreferences.rules.find(rule => rule.kind === "sticker" && rule.value === sticker.id && rule.status === "blocked");
       const scopeButton = document.createElement("button"); scopeButton.type = "button"; scopeButton.className = "button button-quiet";
       scopeButton.textContent = blocked ? "移除此图的本群禁用" : "仅本群禁用此图";
@@ -1298,9 +1385,35 @@ let memberRefreshTimer;
 const memberForm = document.querySelector("#member-form");
 const memberGroupSelect = document.querySelector("#member-group");
 const memberKindNames = { preference: "娱乐偏好", interest: "兴趣话题", interaction: "互动习惯", nickname: "称呼偏好" };
+const dialogueTasks = new Map(), dialogueSubmitting = new Set(), maintenanceBusy = new Set();
+function selectMemoryGroup(group){
+  if(!knowledgeForm.hidden||!memberForm.hidden){showToast('请先保存或取消正在编辑的记忆，再切换群。',true);return false;}
+  selectedKnowledgeGroup=group; knowledgeLoadSequence++; knowledgeMaintenance=null;
+  if(group){selectedMemberGroup=group;memberLoadSequence++;memberData={...memberData,maintenance:null};memberGroupSelect.value=group;knowledgeGroupSelect.value=group;}
+  renderMemoryMaintenance('knowledge',knowledgeMaintenance);renderMemoryMaintenance('member',memberData.maintenance);renderDialogueTasks();return true;
+}
+function updateDialogueTask(group,learning){
+  if(group&&learning)dialogueTasks.set(group,learning.outcome==='learning'?{...learning.manualTask,state:'running'}:learning.manualTask??null);
+  renderDialogueTasks();
+}
+function renderDialogueTasks(){
+  for(const [prefix,group,id]of[['knowledge',selectedKnowledgeGroup,'extract-knowledge'],['member',selectedMemberGroup,'extract-member-impressions']]){
+    const task=dialogueTasks.get(group),busy=dialogueSubmitting.has(group)||['queued','running'].includes(task?.state),button=document.getElementById(id);
+    button.disabled=!group||busy;button.textContent=busy?'整理本群对话中…':'整理本群对话';
+    document.getElementById(prefix+'-dialogue-task-status').textContent=!group?'请选择群；私聊资料单独维护。':`群 ${group} · 两页共用对话整理任务：`+({queued:'已排队，等待处理间隔',running:'正在处理',failed:'未完成，请查看下方状态；有效缓冲会继续重试',interrupted:'上次任务因重启中断，等待新对话',succeeded:`上次完成，知识更新 ${task?.knowledge??0} 条、成员印象 ${task?.members??0} 条、相处反馈 ${task?.growth??0} 条；无新证据时不新增`} [task?.state]??'尚未安排手动整理');
+  }
+}
+async function startDialogueLearning(group){
+  if(!group||dialogueSubmitting.has(group)||['queued','running'].includes(dialogueTasks.get(group)?.state))return;
+  dialogueSubmitting.add(group);renderDialogueTasks();
+  try{const result=await requestAdminApi('/api/knowledge/learn',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({groupId:group})});dialogueTasks.set(group,result.task);showToast(result.message);}
+  catch(error){showToast(error.message,true);}
+  finally{dialogueSubmitting.delete(group);renderDialogueTasks();if(selectedKnowledgeGroup===group)await loadKnowledge();if(selectedMemberGroup===group&&memberForm.hidden)await loadMemberImpressions();}
+}
 function renderMemoryMaintenance(prefix, data) {
   const status = document.querySelector(`#${prefix}-maintenance-status`), button = document.querySelector(`#maintain-${prefix}-memory`);
-  button.disabled = !data;
+  button.disabled = !data || maintenanceBusy.has(data.groupId);
+  button.textContent=data&&maintenanceBusy.has(data.groupId)?"正在整理本群记忆…":"整理本群记忆";
   if (!data) { status.textContent = "请选择已授权群；私聊资料单独维护。"; return; }
   const last = data.last;
   status.textContent = `知识：${data.knowledge.active}条启用、${data.knowledge.pending}条待确认、${data.knowledge.archived}条归档；成员印象：${data.members.active}条启用、${data.members.archived}条归档。常用词：${data.hot.map(item => `${item.title}（${item.recalls}次召回）`).join("、") || "尚未形成，正常聊天检索后逐步积累"}。`
@@ -1312,12 +1425,13 @@ async function maintainMemory(prefix) {
   if (!data) return;
   if (data.groupId !== (prefix === "knowledge" ? selectedKnowledgeGroup : selectedMemberGroup)) { showToast("正在切换群，请等本群记忆读取完成。", true); return; }
   if (!knowledgeForm.hidden || !memberForm.hidden) { showToast("请先保存或关闭正在编辑的记忆，再整理。", true); return; }
-  const button = document.querySelector(`#maintain-${prefix}-memory`); button.disabled = true;
+  if(maintenanceBusy.has(data.groupId))return;
+  maintenanceBusy.add(data.groupId);renderMemoryMaintenance("knowledge",knowledgeMaintenance);renderMemoryMaintenance("member",memberData.maintenance);
   try {
     const result = await requestAdminApi("/api/memory-maintenance", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId: data.groupId, revision: data.revision }) });
     showToast(result.message);
   } catch (error) { showToast(error.message, true); }
-  finally { if (prefix === "knowledge") await loadKnowledge(); else await loadMemberImpressions(); }
+  finally { maintenanceBusy.delete(data.groupId);if(selectedKnowledgeGroup===data.groupId)await loadKnowledge();if(selectedMemberGroup===data.groupId)await loadMemberImpressions();renderMemoryMaintenance("knowledge",knowledgeMaintenance);renderMemoryMaintenance("member",memberData.maintenance); }
 }
 document.querySelector("#maintain-knowledge-memory").addEventListener("click", () => void maintainMemory("knowledge"));
 document.querySelector("#maintain-member-memory").addEventListener("click", () => void maintainMemory("member"));
@@ -1366,6 +1480,9 @@ function renderMemberFacts() {
       memberField("印象内容", fact.content, value => { fact.content = value; }, { area: true }),
       memberField("关键词（逗号或顿号分隔）", fact.tags.join("、"), value => { fact.tags = value.split(/[,，、]/u).map(tag => tag.trim()).filter(Boolean); }, { maxLength: 120 }));
     const actions = document.createElement("div"); actions.className = "form-actions";
+    const shareLabel = document.createElement('label'), shareInput = document.createElement('input'); shareInput.type = 'checkbox'; shareInput.checked = fact.replyAllowed === true;
+    shareInput.addEventListener('change', () => { fact.replyAllowed = shareInput.checked; });
+    shareLabel.append(shareInput, document.createTextNode('成员已同意：允许在来源群回复中使用此条非敏感印象（只向本人相关话题召回）')); card.append(shareLabel);
     for (const [caption, action] of [[fact.archivedAt ? "恢复并确认" : "设为已确认", () => { fact.reviewStatus = "approved"; fact.enabled = true; fact.archivedAt = null; fact.stale = false; }], ["设为拒绝", () => { fact.reviewStatus = "rejected"; fact.enabled = false; }], ["停用", () => { fact.enabled = false; }], ["删除此条", () => { memberDraft.facts = memberDraft.facts.filter(item => item.id !== fact.id); }]]) {
       const button = document.createElement("button"); button.type = "button"; button.className = "button button-quiet"; button.textContent = caption;
       button.addEventListener("click", () => { action(); renderMemberFacts(); showToast("修改待保存，请点击‘保存成员’。"); }); actions.append(button);
@@ -1386,19 +1503,21 @@ function editMember(profile = null) {
 }
 document.querySelector("#member-show-archives").addEventListener("change", () => { if (memberDraft) renderMemberFacts(); });
 async function loadMemberImpressions() {
+  if(!selectedMemberGroup && selectedKnowledgeGroup)selectedMemberGroup=selectedKnowledgeGroup;
   const sequence = ++memberLoadSequence;
   let data;
   try { data = await requestAdminApi(`/api/member-impressions${selectedMemberGroup ? `?groupId=${encodeURIComponent(selectedMemberGroup)}` : ""}`); }
   catch (error) {
     if (sequence !== memberLoadSequence) return;
     if (error.status !== 404 || !selectedMemberGroup) throw error;
+    if(selectedKnowledgeGroup===selectedMemberGroup)selectedKnowledgeGroup=undefined;
     selectedMemberGroup = ""; data = await requestAdminApi("/api/member-impressions");
   }
   if (sequence !== memberLoadSequence) return;
   selectedMemberGroup = data.groupId ?? ""; memberData = data;
   renderMemoryMaintenance("member", data.maintenance);
   memberGroupSelect.replaceChildren(...data.groups.map(id => new Option(`群 ${id}`, id))); memberGroupSelect.value = selectedMemberGroup;
-  document.querySelector("#add-member").disabled = !selectedMemberGroup; document.querySelector("#extract-member-impressions").disabled = !selectedMemberGroup;
+  document.querySelector("#add-member").disabled = !selectedMemberGroup; updateDialogueTask(selectedMemberGroup,data.learning);
   const learning = data.learning;
   const outcomes = { saved: "已保存或更新资料", "no-facts": "本次没有足够的新印象", "waiting-context": "等待与AI继续对话", waiting: "等待合并整理", learning: "正在整理对话", "model-error": "模型暂时失败，保留短期缓冲重试", "daily-limit": "知识提炼今日次数已用完", "buffer-cleared": "重启或关闭后已清空原始缓冲", filtered: "已过滤不适合积累的内容", "missing-key": "尚未配置模型密钥" };
   document.querySelector("#member-learning-status").textContent = selectedMemberGroup ? `群 ${selectedMemberGroup} · 待整理对话${learning?.bufferedMemberMessages ?? 0}条（共享缓冲${learning?.bufferedMessages ?? 0}条） · ${learning?.outcome === "daily-limit" ? "知识提炼达上限，成员对话积累仍可继续" : outcomes[learning?.outcome] ?? "等待与AI对话"} · 今日后台成员整理${learning?.memberAttemptsToday ?? 0}次，无每日次数上限${learning?.lastMemberSavedAt ? ` · 最近印象更新${new Date(learning.lastMemberSavedAt).toLocaleString("zh-CN")}` : ""}` : "请先在群与权限中添加授权群。";
@@ -1406,7 +1525,7 @@ async function loadMemberImpressions() {
   if (!memberRefreshTimer) memberRefreshTimer = setInterval(() => { if (!managementContent.hidden && !document.querySelector("#page-members").hidden && memberForm.hidden) void loadMemberImpressions().catch(() => {}); }, 10000);
 }
 document.querySelector("#member-filter").addEventListener("input", renderMemberList);
-memberGroupSelect.addEventListener("change", () => { selectedMemberGroup = memberGroupSelect.value; memberForm.hidden = true; void loadMemberImpressions().catch(error => showToast(error.message, true)); });
+memberGroupSelect.addEventListener("change", () => { if(!selectMemoryGroup(memberGroupSelect.value)){memberGroupSelect.value=selectedMemberGroup;return;} void loadMemberImpressions().catch(error=>showToast(error.message,true)); });
 document.querySelector("#refresh-members").addEventListener("click", () => { memberForm.hidden = true; void loadMemberImpressions().catch(error => showToast(error.message, true)); });
 document.querySelector("#add-member").addEventListener("click", () => editMember());
 document.querySelector("#cancel-member").addEventListener("click", () => { memberForm.hidden = true; void loadMemberImpressions().catch(error => showToast(error.message, true)); });
@@ -1429,24 +1548,25 @@ document.querySelector("#forget-member").addEventListener("click", async () => {
   try { const data = await requestAdminApi("/api/member-impressions", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId, userId: memberDraft.userId, revision: memberData.revision }) }); if (groupId === selectedMemberGroup) { memberData = data; memberForm.hidden = true; renderMemberList(); } showToast(data.message); }
   catch (error) { showToast(error.message, true); }
 });
-document.querySelector("#extract-member-impressions").addEventListener("click", async () => {
-  try { const data = await requestAdminApi("/api/member-impressions/learn", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ groupId: selectedMemberGroup }) }); showToast(data.message); }
-  catch (error) { showToast(error.message, true); }
-});
+document.querySelector("#extract-member-impressions").addEventListener("click",()=>void startDialogueLearning(selectedMemberGroup));
 
 let visualData = { entries: [], revision: null }, visualScope;
 let visualDraft = null, visualSequence = 0;
 const visualForm = document.querySelector("#visual-form"), visualGroupSelect = document.querySelector("#visual-group");
-const visualStatusLabels = { candidate: "待核实", confirmed: "已启用参考", disabled: "已停用", rejected: "已拒绝" };
+const visualStatusLabels = { provisional: "临时标注（本群、未核实）", disputed: "待复审（暂停使用）", candidate: "旧候选（未使用）", confirmed: "已启用参考", disabled: "已停用", rejected: "已拒绝" };
+function visualProvisionalWorkflowAvailable() { return visualData.workflow === "provisional-conflict-review-v1"; }
 function openVisualEditor(entry) {
   visualDraft = entry;
   document.querySelector("#visual-name").value = entry.name;
   document.querySelector("#visual-work").value = entry.work;
   document.querySelector("#visual-traits").value = entry.traits.join("\n");
   document.querySelector("#visual-entry-status").value = entry.status;
+  document.querySelector("#visual-entry-status option[value=provisional]").disabled = visualScope === null || !visualProvisionalWorkflowAvailable();
+  document.querySelector("#visual-entry-status option[value=disputed]").disabled = visualScope === null || !visualProvisionalWorkflowAvailable();
   visualForm.hidden = false; document.querySelector("#visual-name").focus();
 }
 async function mutateVisual(entry, remove = false) {
+  if (!remove && ["provisional", "disputed"].includes(entry.status) && !visualProvisionalWorkflowAvailable()) throw new Error("当前服务仍运行旧版，临时标注与复审操作需后续重启加载新版后使用。");
   const scope = visualScope, revision = visualData.revision;
   visualGroupSelect.disabled = true;
   try {
@@ -1456,6 +1576,15 @@ async function mutateVisual(entry, remove = false) {
     showToast(data.message);
   } catch (error) { if (error.status === 409) { visualForm.hidden = true; await loadVisualMemories(); } throw error; }
   finally { visualGroupSelect.disabled = false; }
+}
+function confirmVisualSelection(entry, status) {
+  if (!["confirmed", "provisional"].includes(status) || !(entry.conflicts?.length || entry.status === "disputed")) return true;
+  return confirm(`选定「${entry.name} · ${entry.work || "作品待补充"}」为${visualStatusLabels[status]}？同群同图的其他标注会停用，双方证据仍保留。通用参考不会被修改；本群使用此次选定结果。`);
+}
+function appendVisualSource(container, source) {
+  let url; try { url = new URL(source.url); if (url.protocol !== "https:" || url.username || url.password) return; } catch { return; }
+  const row = document.createElement("p"), link = document.createElement("a"); link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = source.title || url.hostname; row.append(link);
+  if (source.quote) row.append(document.createTextNode(" · 正文证据：" + source.quote)); container.append(row);
 }
 function renderVisualMemories() {
   const list = document.querySelector("#visual-list"), query = document.querySelector("#visual-filter").value.toLocaleLowerCase("zh-CN");
@@ -1469,25 +1598,45 @@ function renderVisualMemories() {
       const image = document.createElement("img"); image.src = entry.preview; image.alt = "对应图片的低清预览"; image.width = 160; image.loading = "lazy"; card.append(image);
     }
     const title = document.createElement("h3"); title.textContent = `${entry.name} · ${entry.work || "作品待补充"}`;
-    const info = document.createElement("p"); info.className = "field-hint"; info.textContent = `${visualStatusLabels[entry.status] ?? entry.status} · ${entry.origin === "web-verified" ? "联网核对后自动采用" : entry.status === "confirmed" ? "管理员标注（非官方核验）" : "群友提供的待核实说法"} · ${entry.groupId ? "仅本群" : "通用管理员参考"} · ${entry.evidenceRefs?.length ?? 0}条来源${entry.relatedStickerId ? " · 已关联库存表情" : ""}${entry.preview ? "" : " · 旧参考未保存预览"}`;
+    const info = document.createElement("p"); info.className = "field-hint"; info.textContent = `${entry.suspendedInGroup ? "本群暂停使用的通用参考" : visualStatusLabels[entry.status] ?? entry.status} · ${entry.status === "provisional" ? "同图参考群内标注，异图仅作弱提示" : entry.status === "disputed" ? "存在冲突，复审选定前不自动使用" : entry.origin === "web-verified" && entry.status === "confirmed" ? "联网核对后采用" : entry.status === "confirmed" ? "管理员标注（非官方核验）" : "当前不用于识图"} · ${entry.groupId ? "仅本群" : "通用管理员参考"} · ${entry.evidenceRefs?.length ?? 0}条来源${entry.relatedStickerId ? " · 已关联库存表情" : ""}${entry.preview ? "" : " · 旧参考未保存预览"}`;
     const traits = document.createElement("p"); traits.textContent = entry.traits.join("；");
     card.append(title, info, traits);
+    if (entry.legacyCandidate) { const legacy = document.createElement("p"); legacy.className = "field-hint"; legacy.textContent = "旧候选具备可追溯单图来源，按本群临时标注使用；原记录未批量迁移，管理员仍可撤回。"; card.append(legacy); }
+    if (entry.suspendedInGroup) { const suspended = document.createElement("p"); suspended.className = "field-hint"; suspended.textContent = "本群未套用此通用参考：存在同图争议或优先使用本群标注，通用原记录仍保留。请查看本群条目与复审状态。"; card.append(suspended); }
     if (entry.verification) {
       const checks = { verified: "正文与参考画面核对通过", conflict: "资料或画面存在冲突", "existing-reference-conflict": "核对结果与已有同图标注冲突，未自动覆盖", "insufficient-sources": "可靠正文来源不足", "no-reference-image": "未取得可靠页面中的角色参考图", "insufficient-evidence": "姓名、作品或视觉证据不足", "search-disabled": "联网搜索已关闭", "search-unavailable": "搜索暂时不可用", "verification-unavailable": "核对未完成", cancelled: "核对已取消" };
       const details = document.createElement("details"), summary = document.createElement("summary");
       summary.textContent = "联网核对：" + (checks[entry.verification.status] ?? "待核实"); details.append(summary);
-      for (const source of (entry.verification.sources ?? [])) {
-        let url; try { url = new URL(source.url); if (url.protocol !== "https:" || url.username || url.password) continue; } catch { continue; }
-        const row = document.createElement("p"), link = document.createElement("a"); link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = source.title || url.hostname; row.append(link);
-        if (source.quote) row.append(document.createTextNode(" · 正文证据：" + source.quote)); details.append(row);
-      }
+      for (const source of (entry.verification.sources ?? [])) appendVisualSource(details, source);
       const time = document.createElement("p"); time.className = "field-hint"; time.textContent = "核对时间：" + new Date(entry.verification.checkedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }); details.append(time); card.append(details);
     }
     if (entry.evidenceRefs?.length) {
       const details = document.createElement("details"), label = document.createElement("summary"), refs = document.createElement("p");
       label.textContent = "来源时间与指纹"; refs.className = "field-hint";
-      refs.textContent = entry.evidenceRefs.map(ref => `${new Date(ref.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })} · ${ref.hash.slice(0, 16)}`).join("\n");
+      refs.textContent = entry.evidenceRefs.map(ref => `${new Date(ref.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })} · 消息指纹 ${String(ref.hash ?? "").slice(0, 16)}${ref.imageSourceHash ? ` · 图片来源 ${String(ref.imageSourceHash).slice(0, 16)}` : ""}`).join("\n");
       details.append(label, refs); card.append(details);
+    }
+    if (entry.conflicts?.length) {
+      const details = document.createElement("details"), label = document.createElement("summary");
+      label.textContent = `冲突与关联标注（${entry.conflicts.length}条，保留双方来源）`; details.open = entry.status === "disputed"; details.append(label);
+      const reasons = { "same-image-correction-conflict": "同图出现不同角色或作品", "same-image-reference-conflict": "与已有同图参考冲突", "reliable-source-conflict": "可靠资料或参考画面与标注冲突", "same-image-correction": "同图出现不同角色或作品", "same-image-conflict": "同图出现不同角色或作品", "existing-reference-conflict": "与已有同图参考冲突", "verification-conflict": "可靠资料或参考画面与标注冲突" };
+      for (const conflict of entry.conflicts) {
+        const row = document.createElement("p"); row.className = "field-hint";
+        row.textContent = `${conflict.name || "关联标注"} · ${conflict.work || "作品待补充"} · ${conflict.scope === "global" ? "通用参考" : "本群"} · ${reasons[conflict.reason] ?? "角色、作品或画面证据存在分歧"}${conflict.at ? ` · ${new Date(conflict.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}` : ""}`; details.append(row);
+        const related = [...visualData.entries, ...(visualData.sharedReferences ?? [])].find(item => item.id === conflict.entryId);
+        if (related) {
+          const button = document.createElement("button"); button.type = "button"; button.className = "button button-quiet"; button.textContent = `查看关联标注：${related.name}（${visualStatusLabels[related.status] ?? related.status}）`;
+          button.addEventListener("click", () => { if (visualScope !== null && related.groupId === null) { visualScope = null; visualForm.hidden = true; visualDraft = null; void loadVisualMemories(); } else openVisualEditor(related); }); details.append(button);
+        }
+        for (const source of (conflict.sources ?? [])) appendVisualSource(details, source);
+      }
+      card.append(details);
+    }
+    if (entry.resolution) {
+      const resolved = document.createElement("p"); resolved.className = "field-hint";
+      const selected = [...visualData.entries, ...(visualData.sharedReferences ?? [])].find(item => item.id === entry.resolution.entryId);
+      const resolutionLabels = { selected: "管理员已选定此标注", superseded: "管理员已选定其他标注，此条保留供追溯", withdrawn: "管理员已撤回使用或暂停复审" };
+      resolved.textContent = `${resolutionLabels[entry.resolution.action] ?? "已记录管理员处理结果"}${selected && entry.resolution.action !== "withdrawn" ? ` · 选定：${selected.name} · ${selected.work || "作品待补充"}` : ""}${entry.resolution.at ? ` · ${new Date(entry.resolution.at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}` : ""}`; card.append(resolved);
     }
     const controls = document.createElement("div"); controls.className = "form-actions";
     if (visualScope !== null && entry.groupId === null) {
@@ -1496,9 +1645,11 @@ function renderVisualMemories() {
       controls.append(button);card.append(controls);list.append(card);continue;
     }
     const actions = [["编辑", () => openVisualEditor(entry)]];
-    if (entry.status !== "confirmed") actions.push(["确认并启用", () => { if (!entry.work) { openVisualEditor(entry); showToast("请先补充作品名，再确认启用。", true); return; } return mutateVisual({ ...entry, status: "confirmed" }); }]);
-    if (entry.status === "confirmed") actions.push(["停用", () => mutateVisual({ ...entry, status: "disabled" })]);
-    if (entry.status === "candidate") actions.push(["拒绝", () => mutateVisual({ ...entry, status: "rejected" })]);
+    if (visualProvisionalWorkflowAvailable() && visualScope !== null && entry.status !== "provisional") actions.push(["选定为本群临时标注", () => { if (confirmVisualSelection(entry, "provisional")) return mutateVisual({ ...entry, status: "provisional" }); }]);
+    if (entry.status !== "confirmed") actions.push(["确认并启用", () => { if (!entry.work) { openVisualEditor(entry); showToast("请先补充作品名，再确认启用。", true); return; } if (confirmVisualSelection(entry, "confirmed")) return mutateVisual({ ...entry, status: "confirmed" }); }]);
+    if (["provisional", "confirmed"].includes(entry.status) && visualScope !== null) actions.push(["撤回使用", () => mutateVisual({ ...entry, status: "candidate" })]);
+    if (entry.status !== "disabled") actions.push(["停用", () => mutateVisual({ ...entry, status: "disabled" })]);
+    if (entry.status !== "rejected") actions.push(["拒绝", () => mutateVisual({ ...entry, status: "rejected" })]);
     actions.push(["删除", () => { if (confirm("删除这条角色视觉记忆？已有备份不受影响。")) return mutateVisual(entry, true); }]);
     for (const [label, action] of actions) {
       const button = document.createElement("button"); button.type = "button"; button.className = "button button-quiet"; button.textContent = label;
@@ -1515,11 +1666,16 @@ async function loadVisualMemories() {
     const data = await requestAdminApi("/api/visual-memory" + (visualScope === undefined ? "" : `?groupId=${encodeURIComponent(visualScope ?? "global")}`));
     if (sequence !== visualSequence) return;
     visualScope = data.groupId; visualData = data;
+    const workflowStatus = document.querySelector("#visual-workflow-status");
+    workflowStatus.textContent = visualProvisionalWorkflowAvailable() ? "当前服务支持：本群临时标注与冲突复审。" : "当前服务仍运行旧版；新临时标注与冲突复审需后续重启加载。新状态操作暂不可用，下方显示当前服务的数据。";
     visualGroupSelect.replaceChildren(...[...data.groups.map(id => ({ value: id, text: `群 ${id}` })), { value: "global", text: "通用管理员参考（所有群）" }].map(item => { const option = document.createElement("option"); option.value = item.value; option.textContent = item.text; return option; }));
     visualGroupSelect.value = visualScope ?? "global";
     const learning = { waiting: "等待新的角色纠正", queued: "纠正处理已排队", screening: "正在检查图片是否适合保存", extracting: "正在提取角色标注", verifying: "正在查维基百科、读取资料并核对画面", "web-verified": "证据核对通过，已自动采用", "candidate-saved": "已保留待核实候选，可查看不足或冲突原因", duplicate: "已有相同标注，未重复添加", "no-correction": "没有可保存的明确角色纠正", "ambiguous-image": "图片不唯一，未自动绑定，请单独发图纠正", "missing-image": "这次纠正未关联到图片，请附一张图或引用图片说明", "image-unavailable": "纠正图片读取未完成，未保存", "review-unavailable": "图片内容检查暂未完成，未保存", "content-rejected": "图片内容检查未通过，未保存", "extraction-unavailable": "角色标注模型请求未完成，未形成候选", "invalid-extraction": "模型未返回有效角色标注，未形成候选", "preview-unavailable": "图片预览或指纹处理未完成，未保存", "save-unavailable": "候选保存未完成，请检查本机数据目录", "verification-save-unavailable": "候选已保存，但核对结果写入未完成", cancelled: "配置或会话范围已变化，本次学习已取消", interrupted: "上次学习被服务重启中断，请重新附图纠正", "queue-full": "纠正队列暂满，请稍后重发", "unavailable-or-rejected": "本次内容检查或提炼未完成，未保存图片；可重新明确纠正" };
+    learning["provisional-saved"] = "已保存本群临时标注，联网核实不影响有限使用";
+    learning.disputed = "同图标注或可靠资料存在冲突，已暂停自动使用，请复审";
+    learning["candidate-saved"] = "已保留旧候选，尚未用于识图，可审阅选定";
     const scopeLabel=visualScope===null?"通用参考":"本群";
-    document.querySelector("#visual-status").textContent = `${scopeLabel}${data.entries.length}条 · 待核实${data.entries.filter(entry => entry.status === "candidate").length}条 · 已启用${data.entries.filter(entry => entry.status === "confirmed").length}条${visualScope!==null?` · 另有通用参考${data.sharedReferences?.length??0}条（已在下方显示）`:""} · ${visualScope===null?"群友纠正请切换到来源群查看":learning[data.learning?.code] ?? "等待纠正"}${data.learning?.at?` · 最近处理：${new Date(data.learning.at).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai"})}`:""}${data.learningEnabled ? "" : " · 自动学习已关闭"}`;
+    document.querySelector("#visual-status").textContent = `${scopeLabel}${data.entries.length}条 · 临时标注${data.entries.filter(entry => entry.status === "provisional").length}条 · 待复审${data.entries.filter(entry => entry.status === "disputed").length}条 · 旧候选${data.entries.filter(entry => entry.status === "candidate").length}条 · 已启用${data.entries.filter(entry => entry.status === "confirmed").length}条${visualScope!==null?` · 另有通用参考${data.sharedReferences?.length??0}条（已在下方显示）`:""} · ${visualScope===null?"群友纠正请切换到来源群查看":learning[data.learning?.code] ?? "等待纠正"}${data.learning?.at?` · 最近处理：${new Date(data.learning.at).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai"})}`:""}${data.learningEnabled ? "" : " · 自动学习已关闭"}`;
     renderVisualMemories();
   } catch (error) { document.querySelector("#visual-status").textContent = error.message; }
 }
@@ -1531,6 +1687,7 @@ document.querySelector("#cancel-visual").addEventListener("click", () => { visua
 visualForm.addEventListener("submit", async event => {
   event.preventDefault(); if (!visualDraft) return;
   const button = visualForm.querySelector("button[type=submit]"); button.disabled = true;
+  if (!confirmVisualSelection(visualDraft, document.querySelector("#visual-entry-status").value)) { button.disabled = false; return; }
   try { await mutateVisual({ id: visualDraft.id, name: document.querySelector("#visual-name").value, work: document.querySelector("#visual-work").value,
     traits: document.querySelector("#visual-traits").value.split("\n").map(x => x.trim()).filter(Boolean), status: document.querySelector("#visual-entry-status").value }); }
   catch (error) { showToast(error.message, true); } finally { button.disabled = false; }
@@ -1539,7 +1696,7 @@ setInterval(() => { if (!managementContent.hidden && !document.querySelector("#p
 
 function setupNavigation() {
   const descriptions = { members: "从与AI的日常对话中逐步了解每位成员，显示初步观察、已形成印象及自动维护。", chat: "管理通用功能、模型连接和默认人设；各群角色在分群人设中单独配置。", personas: "选择一个群，分别设置个性、表达风格、昵称呼唤词和长期记忆。", knowledge: "积累群内网梗和互动背景，查看、确认或编辑学到的知识。", stickers: "放入常用表情，给它们标上情绪和适用场景。", access: "查看连接状态，设置哪些群和好友可以与 bot 互动。", commands: "管理固定指令，常用回复一键配置。" };
-  descriptions.visual = "管理角色纠正与核对来源；联网核对通过或管理员启用后，用于所在群的后续识图。";
+  descriptions.visual = "明确单图纠正先记为本群临时标注；同图参考、异图弱提示，冲突暂停并复审，可选定或撤回。";
   const buttons = [...document.querySelectorAll(".management-nav [data-page]")];
   function showPage(page) {
     if (!Object.hasOwn(descriptions, page)) page = "chat";
@@ -1561,24 +1718,33 @@ function setupNavigation() {
     button.addEventListener("click", () => showPage(button.dataset.page));
     button.addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return; event.preventDefault(); const next = buttons[(index + (event.key === "ArrowRight" ? 1 : buttons.length - 1)) % buttons.length]; showPage(next.dataset.page); next.focus(); });
   });
+  for (const card of document.querySelectorAll("[data-jump-page]")) {
+    card.addEventListener("click", () => {
+      showPage(card.dataset.jumpPage);
+      const group = card.dataset.openSettingsGroup;
+      if (!group) return;
+      const detail = document.querySelector(`[data-settings-group="${group}"]`);
+      if (detail) { detail.open = true; requestAnimationFrame(() => detail.scrollIntoView({ block: "start", behavior: "smooth" })); }
+    });
+  }
   window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
   showPage(location.hash.slice(1));
   document.querySelector("#knowledge-switches").prepend(llmFields.knowledgeEnabled.closest(".settings-field"));
   const grid = llmSettingsForm.querySelector(".settings-grid");
   const groups = [
-    ["常用功能", true, ["nickname-trigger-enabled", "bot-aliases", "conversation-followup-enabled", "forward-reading-enabled", "search-enabled", "vision-enabled", "video-understanding-enabled", "proactive-chat-enabled"]],
-    ["默认人设与私聊记忆", false, ["llm-personality", "llm-expression-style", "llm-memory", "llm-system-prompt"]],
-    ["长回复发送", false, ["detailed-discussion-enabled", "long-reply-forward-enabled", "long-reply-threshold"]],
-    ["联网阅读与总结", false, ["content-summary-enabled", "summary-output"]],
-    ["模型连接与回复参数", false, ["llm-model", "llm-api-endpoint", "llm-api-key", "clear-llm-api-key", "llm-temperature", "llm-max-tokens", "model-retry-enabled", "refresh-model-diagnostics", "refresh-reply-recovery"]],
-    ["联网搜索来源", false, ["search-provider", "serper-api-key", "clear-serper-api-key", "search-country", "search-language"]],
-    ["图片与角色辨认", false, ["character-recognition-enabled"]],
-    ["ChatGPT 网页生图", false, ["chatgpt-image-generation-enabled", "refresh-chatgpt-imagegen"]],
-    ["B站视频理解", false, ["video-asr-enabled", "video-frames-enabled", "video-max-minutes"]],
-    ["自主刷B站与群分享", false, ["video-discovery-enabled", "video-discovery-group-ids", "refresh-video-discovery"]],
-    ["主动聊天频率", false, ["proactive-pause-when-ignored", "proactive-cooldown-minutes", "proactive-frequency-minutes", "proactive-debounce-seconds", "proactive-daily-limit"]],
-  ].map(([title, open, ids]) => {
-    const detail = document.createElement("details"); detail.className = "settings-group"; detail.open = open;
+    ["common", "常用功能", true, ["nickname-trigger-enabled", "bot-aliases", "conversation-followup-enabled", "forward-reading-enabled", "search-enabled", "vision-enabled", "video-understanding-enabled", "proactive-chat-enabled"]],
+    ["default-persona", "默认人设与私聊记忆", false, ["llm-personality", "llm-expression-style", "llm-memory", "llm-system-prompt"]],
+    ["long-reply", "长回复发送", false, ["detailed-discussion-enabled", "long-reply-forward-enabled", "long-reply-threshold"]],
+    ["web-reading", "联网阅读与总结", false, ["content-summary-enabled", "summary-output"]],
+    ["model", "模型连接与回复参数", false, ["llm-model", "llm-api-endpoint", "llm-api-key", "clear-llm-api-key", "llm-temperature", "llm-max-tokens", "model-retry-enabled", "refresh-model-diagnostics", "refresh-reply-recovery"]],
+    ["search-sources", "联网搜索来源", false, ["search-provider", "serper-api-key", "clear-serper-api-key", "tavily-api-key", "clear-tavily-api-key", "search-country", "search-language"]],
+    ["vision", "图片与角色辨认", false, ["character-recognition-enabled"]],
+    ["image-generation", "ChatGPT 网页生图", false, ["chatgpt-image-generation-enabled", "refresh-chatgpt-imagegen"]],
+    ["video", "B站视频理解", false, ["video-asr-enabled", "video-frames-enabled", "video-max-minutes"]],
+    ["video-discovery", "自主刷B站与群分享", false, ["video-discovery-enabled", "video-discovery-group-ids", "refresh-video-discovery"]],
+    ["proactive", "主动聊天频率", false, ["proactive-pause-when-ignored", "proactive-cooldown-minutes", "proactive-frequency-minutes", "proactive-debounce-seconds", "proactive-daily-limit"]],
+  ].map(([key, title, open, ids]) => {
+    const detail = document.createElement("details"); detail.className = "settings-group"; detail.dataset.settingsGroup = key; detail.open = open;
     const summary = document.createElement("summary"); summary.textContent = title;
     const content = document.createElement("div"); content.className = "settings-grid";
     for (const id of ids) content.append(document.getElementById(id).closest(".settings-field"));
@@ -1608,7 +1774,8 @@ document.querySelector("#refresh-video-discovery").addEventListener("click", asy
 document.querySelector("#refresh-chatgpt-imagegen").addEventListener("click", async (event) => {
   const button = event.currentTarget, output = document.querySelector("#chatgpt-imagegen-status"); button.disabled = true;
   try { const { status } = await requestAdminApi("/api/chatgpt-imagegen");
-    output.textContent = `Skill ${status.installed ? "已安装" : "未安装"} · 浏览器 ${status.connected ? "已连接" : "未连接"}\n排队 ${status.pending} · ${status.running ? "正在生成" : "当前空闲"} · 已生成待发送 ${status.generated} · 已发出 ${status.delivered}\n失败 ${status.failed} · 需核对 ${status.uncertain}`;
+    const pageState = { "composer-ready": "输入框可用（尚未验证出图）", "login-required": "需要在网页登录", "no-chatgpt-tab": "尚未打开 ChatGPT 页面", "page-unavailable": "页面未就绪", "proxy-unavailable": "连接组件未就绪", "browser-disconnected": "浏览器连接未建立" }[status.pageState] ?? "页面状态未知";
+    output.textContent = `Skill ${status.installed ? "已安装" : "未安装"} · 浏览器 ${status.connected ? "已连接" : "未连接"} · ChatGPT ${pageState}\n排队 ${status.pending} · ${status.running ? "正在生成" : "当前空闲"} · 已生成待发送 ${status.generated} · 已发出 ${status.delivered}\n失败 ${status.failed} · 需核对 ${status.uncertain}`;
   } catch (error) { output.textContent = error.message; } finally { button.disabled = false; }
 });
 

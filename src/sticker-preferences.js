@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { recentStickerAllows } from "./sticker-policy.js";
 const file = new URL("../data/sticker-preferences.json", import.meta.url);
 const validGroup = id => typeof id === "string" && /^\d{1,32}$/u.test(id);
+const validScope = id => validGroup(id) || typeof id === "string" && /^private:\d{1,32}$/u.test(id);
 const validSticker = id => typeof id === "string" && /^[a-f\d-]{36}$/u.test(id);
 const key = text => String(text).normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/\s/gu, "");
 function load() {
@@ -64,17 +66,17 @@ export function noteStickerFeedback(groupId, text, quotedStickerId) {
   if (!rule) { if (state.rules.length >= 40) return null; rule = { id: randomUUID(), ...target, status: "candidate", origin: "member", at: Date.now() }; state.rules.push(rule); }
   data.groups[groupId] = state; write(data); return rule;
 }
-export function stickerPolicyAllows(sticker, groupId, { includeRecent = false } = {}) {
-  if (!validGroup(groupId)) return true;
+export function stickerPolicyAllows(sticker, groupId, { includeRecent = false, equivalentIds = [] } = {}) {
+  if (!validScope(groupId)) return true;
   const state = stateFor(load(), groupId), now = Date.now();
   const searchable = key(`${sticker.title} ${sticker.tags.join(" ")} ${sticker.usage}`);
   if (state.rules.some(rule => (rule.status === "blocked" || rule.status === "candidate" && now - rule.at < 15 * 60_000)
     && (rule.kind === "sticker" ? rule.value === sticker.id : searchable.includes(key(rule.value))))) return false;
-  return !includeRecent || !(state.recent ?? []).slice(-3).some(item => item.id === sticker.id && now - item.at < 10 * 60_000);
+  return !includeRecent || recentStickerAllows(sticker, state.recent ?? [], { now, equivalentIds });
 }
-export function recordStickerSent(groupId, stickerId) {
-  if (!validGroup(groupId) || !validSticker(stickerId)) return;
+export function recordStickerSent(groupId, stickerId, contentHash = null) {
+  if (!validScope(groupId) || !validSticker(stickerId)) return;
   const data = load(), state = stateFor(data, groupId);
-  state.recent = [...(state.recent ?? []).filter(item => Date.now() - item.at < 10 * 60_000), { id: stickerId, at: Date.now() }].slice(-6);
+  state.recent = [...(state.recent ?? []).filter(item => Date.now() - item.at < 10 * 60_000), { id: stickerId, at: Date.now(), ...(/^[a-f\d]{64}$/u.test(contentHash ?? "") ? { contentHash } : {}) }].slice(-6);
   data.groups[groupId] = state; write(data);
 }

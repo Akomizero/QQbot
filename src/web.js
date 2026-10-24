@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getLlmApiKey, getSearchApiKey, loadEnvironment, updateLlmApiKey, updateSerperApiKey, validateLlmApiKey } from "./config.js";
+import { getLlmApiKey, getSearchApiKey, loadEnvironment, updateLlmApiKey, updateSerperApiKey, updateTavilyApiKey, validateLlmApiKey } from "./config.js";
 import {
   clearAdminSession,
   getAdminAuthState,
@@ -18,15 +18,16 @@ import { readLlmSettings, writeLlmSettings } from "./llm-settings-store.js";
 import { ensureGroupPersonas, saveGroupPersona, personaFields, settingsForGroup } from "./group-personas.js";
 import { searchKnowledge, knowledgeRevision, readScopedKnowledge, writeScopedKnowledge } from "./knowledge-base.js";
 import { addSticker, deleteSticker, listStickers, readSticker, updateSticker } from "./sticker-store.js";
-import { queueStickerDescription } from "./sticker-learning.js";
-import { getKnowledgeLearningStatus, flushKnowledgeLearning } from "./knowledge-learning.js";
+import { queueStickerDescription, stickerLearningStatus } from "./sticker-learning.js";
+import { getKnowledgeLearningStatus, requestDialogueLearning } from "./knowledge-learning.js";
+import { readPrivacyHitCounters } from './privacy-hit-counters.js';
 import { readModelDiagnostics } from "./model-diagnostics.js";
 import { readReplyRecoveryStatus } from "./reply-recovery.js";
 import { readChatGptImageStatus } from "./chatgpt-imagegen.js";
 import { readVideoDiscoveryStatus } from "./video-discovery.js";
 import { readStickerPreferences, saveStickerPreferences } from "./sticker-preferences.js";
 import { readMemberImpressions, saveMemberImpression, forgetMemberImpression } from "./member-impressions.js";
-import { readVisualMemories, editVisualMemory } from "./visual-memory-store.js";
+import { readVisualMemories, editVisualMemory, usableVisualReferences } from "./visual-memory-store.js";
 import { visualLearningStatus } from "./visual-learning.js";
 import { memoryMaintenanceSummary, maintainGroupMemory } from "./memory-maintenance.js";
 import { readPersonalityGrowth, controlPersonalityGrowth, personalityGrowthBaseline } from "./personality-growth.js";
@@ -271,6 +272,10 @@ export async function startManagementServer({
       }
     }
 
+    if(url.pathname==='/api/privacy-hit-counters'){
+      if(request.method!=='GET'){sendJson(response,405,{error:'此接口只支持 GET。'});return;}
+      sendJson(response,200,readPrivacyHitCounters());return;
+    }
     if (url.pathname === "/api/model-diagnostics" && request.method === "GET") {
       sendJson(response, 200, { events: readModelDiagnostics() }); return;
     }
@@ -290,11 +295,7 @@ export async function startManagementServer({
         const body = await readJsonBody(request, 2 * 1024 * 1024), groupId = knowledgeScope(body?.groupId);
         if (!groupId) throw new Error("成员印象仅用于群聊，请选择一个群。");
         if (request.method === "POST" && url.pathname.endsWith("/learn")) {
-          const settings = readLlmSettings();
-          if (!settings.memberImpressionsEnabled || !settings.memberImpressionsLearningEnabled) throw new Error("请先开启成员印象与自动积累。");
-          if (!getKnowledgeLearningStatus().groups.some(state => state.groupId === groupId && state.bufferedMessages > 0)) { sendJson(response, 409, { error: "本群当前没有待整理对话。与AI正常聊天即可逐步积累；重启不恢复原始聊天缓冲。" }); return; }
-          void flushKnowledgeLearning(groupId).catch(() => {});
-          sendJson(response, 202, { message: "已安排整理本群对话，成员积累不设每日次数额度，仍按5分钟间隔合并处理。稍后刷新成员印象。" }); return;
+          sendJson(response, 202, requestDialogueLearning(groupId)); return;
         }
         if (url.pathname.endsWith("/learn") || !["PUT", "DELETE"].includes(request.method)) { sendJson(response, 405, { error: "成员印象支持GET、PUT和DELETE。" }); return; }
         if (typeof body?.revision !== "string") throw new Error("缺少修订号，请刷新后再保存。");
@@ -474,9 +475,14 @@ export async function startManagementServer({
         const body = request.method === "GET" ? null : await readJsonBody(request);
         const requested = request.method === "GET" ? url.searchParams.get("groupId") : body?.groupId;
         const groupId = requested === "global" ? null : knowledgeScope(requested ?? undefined, { useDefault: true });
-        if (request.method === "GET") sendJson(response, 200, { ...readVisualMemories(groupId), groupId, groups: readAccessControl().groupIds,
-          sharedReferences: groupId === null ? [] : readVisualMemories(null).entries.filter(entry => entry.status === "confirmed"),
-          learningEnabled: readLlmSettings().visualMemoryLearningEnabled, learning: visualLearningStatus(groupId) });
+        if (request.method === "GET") {
+          const usableIds=new Set(usableVisualReferences(groupId).map(entry=>entry.id));
+          sendJson(response, 200, { ...readVisualMemories(groupId), groupId, groups: readAccessControl().groupIds,
+            workflow: "provisional-conflict-review-v1",
+            sharedReferences: groupId === null ? [] : readVisualMemories(null).entries.filter(entry => entry.status === "confirmed")
+              .map(entry=>({...entry,suspendedInGroup:!usableIds.has(entry.id)})),
+            learningEnabled: readLlmSettings().visualMemoryLearningEnabled, learning: visualLearningStatus(groupId) });
+        }
         else if (["PUT", "DELETE"].includes(request.method)) sendJson(response, 200, { ...editVisualMemory(groupId, body?.entry ?? {}, body?.revision, request.method === "DELETE"), groupId, message: "角色视觉记忆已保存，下一次识图生效。" });
         else sendJson(response, 405, { error: "接口方法不支持。" });
       } catch (error) { sendJson(response, error.statusCode ?? 400, { error: error.code ? "无法访问视觉记忆。" : error.message }); }
@@ -527,11 +533,7 @@ export async function startManagementServer({
         const body = await readJsonBody(request);
         const groupId = knowledgeScope(body?.groupId);
         if (groupId === null) { sendJson(response, 400, { error: "私聊资料由管理员手动维护，请选择一个群进行提炼。" }); return; }
-        if (!getKnowledgeLearningStatus().groups.some(state => state.groupId === groupId && state.bufferedMessages > 0)) {
-          sendJson(response, 409, { error: "本群目前没有待提炼的新消息。已有知识仍保留；重启前的原始聊天缓冲不会恢复。" }); return;
-        }
-        void flushKnowledgeLearning(groupId).catch(() => {});
-        sendJson(response, 202, { message: "已安排提炼当前选中群的聊天，结果只保存到本群知识库。" });
+        sendJson(response, 202, requestDialogueLearning(groupId));
       } catch (error) { sendJson(response, error.statusCode ?? 400, { error: error.message ?? "无法安排当前群的提炼。" }); }
       return;
     }
@@ -558,7 +560,7 @@ export async function startManagementServer({
     if (url.pathname === "/api/stickers" || /^\/api\/stickers\/[a-f\d-]{36}(?:\/image)?$/u.test(url.pathname)) {
       const id = url.pathname.split("/")[3];
       try {
-        if (request.method === "GET" && !id) { sendJson(response, 200, { stickers: listStickers() }); return; }
+        if (request.method === "GET" && !id) { sendJson(response, 200, { stickers: listStickers(), learning: stickerLearningStatus() }); return; }
         if (request.method === "GET" && url.pathname.endsWith("/image")) {
           const sticker = readSticker(id, { approvedOnly: true });
           if (!sticker) { sendJson(response, 404, { error: "表情不存在。" }); return; }
@@ -657,10 +659,14 @@ export async function startManagementServer({
           }
 
           if (body.clearSerperApiKey === true && body.serperApiKey) throw new Error("不能同时清除并填写 Serper key。");
+          if (body.clearTavilyApiKey === true && body.tavilyApiKey) throw new Error("不能同时清除并填写 Tavily key。");
           const serperKey = body.serperApiKey === undefined || body.serperApiKey === "" ? undefined : validateLlmApiKey(body.serperApiKey);
+          const tavilyKey = body.tavilyApiKey === undefined || body.tavilyApiKey === "" ? undefined : validateLlmApiKey(body.tavilyApiKey);
           const settings = writeLlmSettings({ ...readLlmSettings(), ...body.settings });
           if (body.clearSerperApiKey === true) updateSerperApiKey(null);
           else if (serperKey !== undefined) updateSerperApiKey(serperKey);
+          if (body.clearTavilyApiKey === true) updateTavilyApiKey(null);
+          else if (tavilyKey !== undefined) updateTavilyApiKey(tavilyKey);
           if (keyAction === "clear") updateLlmApiKey(null);
           if (keyAction === "set") updateLlmApiKey(requestedApiKey);
           try { onLlmSettingsSaved?.(settings); } catch {}

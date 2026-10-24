@@ -7,6 +7,8 @@ import { MAX_SOURCE_IMAGE_BYTES, prepareNapCatImageBase64 } from "./image-input.
 import { reviewStickerBytes, isTrustedStickerReview, STICKER_REVIEW_VERSION } from "./sticker-review.js";
 import { renderSummaryImages } from "./announcement-card.js";
 import { stickerPolicyAllows, recordStickerSent } from "./sticker-preferences.js";
+import { protectLlmResult, runtimePrivacyBoundary, outboundPrivacyScope } from "./privacy-boundary.js";
+import { stickerGroupLimit, stickerContentKey } from "./sticker-policy.js";
 
 const root = fileURLToPath(new URL("../.local/stickers/", import.meta.url));
 const metaPath = resolve(root, "index.json");
@@ -14,6 +16,7 @@ const maxBytes = MAX_SOURCE_IMAGE_BYTES;
 const automaticTargetBytes = 3 * 1024 * 1024;
 const mimeTypes = { jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" };
 const sentAt = new Map();
+const sendingStickers = new Set();
 
 function assetPath(id) {
   if (typeof id !== "string" || !/^[a-f\d-]{36}$/u.test(id)) throw new Error("表情编号无效。");
@@ -37,9 +40,11 @@ export function listStickers() {
         || (entry.usage !== undefined && (typeof entry.usage !== "string" || entry.usage.length > 240))
         || (entry.avoid !== undefined && (typeof entry.avoid !== "string" || entry.avoid.length > 160))
         || (entry.origin === "group" && !/^\d{1,32}$/u.test(entry.groupId))) throw new Error("表情配置无效。");
+      if (entry.origin === 'private' && !/^\d{1,32}$/u.test(entry.userId ?? '')) throw new Error('私聊表情范围无效。');
       return { ...entry, usage: entry.usage ?? "", avoid: entry.avoid ?? "", needsDescription: entry.needsDescription ?? !entry.usage,
         reviewStatus: entry.reviewStatus === "approved" && entry.reviewVersion === STICKER_REVIEW_VERSION && /^[a-f\d]{64}$/u.test(entry.reviewHash ?? "") ? "approved" : "pending",
-        origin: entry.origin === "group" ? "group" : "manual", groupId: entry.origin === "group" ? entry.groupId : null };
+        origin: ['group','private'].includes(entry.origin) ? entry.origin : 'manual', groupId: entry.origin === "group" ? entry.groupId : null,
+        userId: entry.origin === 'private' ? entry.userId : null };
     });
   } catch (error) { if (error.code === "ENOENT") return []; throw error; }
 }
@@ -66,11 +71,12 @@ export function stickerHash(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-export function findStickerSource(bytes, groupId) {
+export function findStickerSource(bytes, groupId, { scope = 'group', userId } = {}) {
   const hash = stickerHash(bytes);
   // A disabled entry also counts as known, preserving the administrator's choice.
-  return listStickers().find((entry) => entry.sourceHash === hash && (!entry.groupId || entry.groupId === groupId));
+  return listStickers().find((entry) => entry.sourceHash === hash && stickerInScope(entry,{scope,groupId,userId}));
 }
+export function stickerInScope(entry,{scope,groupId,userId}) { return entry.origin === 'manual' || scope === 'group' && entry.origin === 'group' && entry.groupId === groupId || scope === 'private' && entry.origin === 'private' && entry.userId === userId; }
 
 export function hasStickerSource(bytes, groupId) {
   return Boolean(findStickerSource(bytes, groupId));
@@ -86,11 +92,11 @@ export async function approveStickerForSending(bytes) {
 function persistSticker(bytes, meta, mime, source = {}) {
   if (bytes.length > maxBytes) throw new Error("每张图片或 GIF 表情最多 20 MB。");
   const entries = listStickers();
-  if (source.origin === "group") {
-    const known = entries.find((entry) => entry.sourceHash === source.sourceHash && (!entry.groupId || entry.groupId === source.groupId));
+  if (['group','private'].includes(source.origin)) {
+    const known = entries.find((entry) => entry.sourceHash === source.sourceHash && stickerInScope(entry,{scope:source.origin,groupId:source.groupId,userId:source.userId}));
     if (known) return known;
-    if (entries.filter((entry) => entry.origin === "group").length >= 40
-      || entries.filter((entry) => entry.groupId === source.groupId).length >= 15) return null;
+    if (entries.filter((entry) => ['group','private'].includes(entry.origin)).length >= 40
+      || entries.filter((entry) => source.origin === 'group' ? entry.origin === 'group' && entry.groupId === source.groupId : entry.origin === 'private' && entry.userId === source.userId).length >= stickerGroupLimit) return null;
   }
   if (entries.length >= 50 || entries.reduce((sum, entry) => sum + entry.size, 0) + bytes.length > 60 * 1024 * 1024) throw new Error("表情包库最多 50 张、总量 60 MB。");
   const entry = { id: randomUUID(), ...meta, mime, size: bytes.length, origin: "manual", groupId: null,
@@ -116,11 +122,11 @@ export async function addSticker(input) {
   return persistSticker(bytes, meta, mimeTypes[info.format]);
 }
 
-export async function addLearnedSticker({ bytes, groupId, title, tags, usage = "", avoid = "", review: suppliedReview, requested = false, allowed = () => true }) {
-  if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > maxBytes || !/^\d{1,32}$/u.test(groupId)) return null;
+export async function addLearnedSticker({ bytes, groupId, userId, scope = 'group', title, tags, usage = "", avoid = "", review: suppliedReview, requested = false, allowed = () => true }) {
+  if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > maxBytes || !['group','private'].includes(scope) || !/^\d{1,32}$/u.test(scope === 'group' ? groupId : userId)) return null;
   const meta = metadata({ title, tags, usage, avoid, enabled: true });
   const sourceHash = stickerHash(bytes);
-  const known = findStickerSource(bytes, groupId);
+  const known = findStickerSource(bytes, groupId, {scope,userId});
   if (known?.reviewStatus === "approved") {
     if (!requested && known.needsDescription && allowed()) return applyStickerDescription(known.id, meta);
     return requested ? known : null;
@@ -159,7 +165,7 @@ export async function addLearnedSticker({ bytes, groupId, title, tags, usage = "
     animationReduced = info.format === "gif";
   }
   if (output.length > (requested ? maxBytes : automaticTargetBytes) || !allowed()) return null;
-  return persistSticker(output, meta, mime, { origin: "group", groupId, sourceHash, learnedAt: Date.now(), animationReduced,
+  return persistSticker(output, meta, mime, { origin: scope, groupId: scope === 'group' ? groupId : null, userId: scope === 'private' ? userId : null, sourceHash, learnedAt: Date.now(), animationReduced,
     requested, autoTitle: requested && !review.description, firstFrameOnly: info.format === "gif" && mime !== "image/gif" });
 }
 
@@ -214,14 +220,19 @@ export function readSticker(id, { enabledOnly = false, approvedOnly = false } = 
 }
 
 export function stickerChoices(conversationId) {
-  if (Date.now() - (sentAt.get(conversationId) ?? 0) < 30_000) return [];
+  if (sendingStickers.has(conversationId) || Date.now() - (sentAt.get(conversationId) ?? 0) < 30_000) return [];
   const groupId = conversationId?.startsWith("group:") ? conversationId.slice(6) : null;
-  return listStickers().filter((entry) => entry.enabled && entry.reviewStatus === "approved" && !entry.needsDescription && (!entry.groupId || entry.groupId === groupId)
-    && stickerPolicyAllows(entry, groupId, { includeRecent: true }))
+  const scope = groupId ?? conversationId, entries = listStickers(), seen = new Set();
+  return entries.filter((entry) => entry.enabled && entry.reviewStatus === "approved" && !entry.needsDescription && stickerInScope(entry,{scope:groupId?'group':'private',groupId,userId:conversationId?.startsWith('private:')?conversationId.slice(8):null})
+    && stickerPolicyAllows(entry, scope, { includeRecent: true, equivalentIds: entries.filter(other => stickerContentKey(other) === stickerContentKey(entry)).map(other => other.id) }))
+    .filter(entry => { const key = stickerContentKey(entry); if (seen.has(key)) return false; seen.add(key); return true; })
     .map(({ id, title, tags, usage, avoid }) => ({ id, title, tags, usage, avoid }));
 }
 
-export async function sendLlmResult(result, destination, sendMessage, { stickersEnabled = true, onSent = () => {} } = {}) {
+export async function sendLlmResult(result, destination, sendMessage, { stickersEnabled = true, onSent = () => {}, services = {} } = {}) {
+  result = protectLlmResult(result, runtimePrivacyBoundary(outboundPrivacyScope(destination)));
+  const choices = services.choices ?? stickerChoices, read = services.read ?? readSticker, policy = services.policy ?? stickerPolicyAllows,
+    record = services.record ?? recordStickerSent, list = services.list ?? listStickers;
   const conversationId = `${destination.message_type}:${destination.group_id ?? destination.user_id}`;
   const message = result.reply ? [{ type: "text", data: { text: result.reply } }] : [];
   let sticker;
@@ -238,8 +249,8 @@ export async function sendLlmResult(result, destination, sendMessage, { stickers
     message[0] = { type: "text", data: { text: `${summary.topic || summary.articles[0]?.game || "内容总结"}\n${links ? "详细内容见图，来源：\n" + links : summary.adapter === "discussion" ? "详细内容见图。" : "根据你提供的文字整理，详细摘要见图。"}` } };
     for (const bytes of summaryImages) message.push({ type: "image", data: { file: `base64://${bytes.toString("base64")}`, summary: "[内容摘要]" } });
   }
-  if (!summary && stickersEnabled && result.stickerId && stickerChoices(conversationId).some((entry) => entry.id === result.stickerId)) {
-    try { sticker = readSticker(result.stickerId, { enabledOnly: true, approvedOnly: true }); } catch {}
+  if (!summary && stickersEnabled && !sendingStickers.has(conversationId) && result.stickerId && choices(conversationId).some((entry) => entry.id === result.stickerId)) {
+    try { sticker = read(result.stickerId, { enabledOnly: true, approvedOnly: true }); } catch {}
   }
   if (sticker) message.push({ type: "image", data: { file: `base64://${sticker.bytes.toString("base64")}`, sub_type: 1, summary: `[${sticker.title.slice(0, 30)}]` } });
   if (!message.length) return false;
@@ -247,15 +258,18 @@ export async function sendLlmResult(result, destination, sendMessage, { stickers
   if (sticker) {
     if (sentAt.size > 2000) for (const [key, value] of sentAt) if (Date.now() - value > 30_000) sentAt.delete(key);
     sentAt.set(conversationId, Date.now());
+    sendingStickers.add(conversationId);
   }
   try {
     const sent = await sendMessage("send_msg", { ...destination, message: sticker || summaryImages.length ? message : result.reply, auto_escape: true },
-      () => { if (!sticker) return true; const latest = listStickers().find(entry => entry.id === sticker.id && entry.enabled && entry.reviewStatus === "approved");
-        return Boolean(latest && stickerPolicyAllows(latest, destination.message_type === "group" ? String(destination.group_id) : null)); });
+      () => { if (!sticker) return true; const entries = list(), latest = entries.find(entry => entry.id === sticker.id && entry.enabled && entry.reviewStatus === "approved");
+        return Boolean(latest && policy(latest, destination.message_type === "group" ? String(destination.group_id) : conversationId,
+          { includeRecent: true, equivalentIds: entries.filter(other => stickerContentKey(other) === stickerContentKey(latest)).map(other => other.id) })); });
     if (sent?.cancelled) { if (sticker) sentAt.delete(conversationId); return false; }
-    if (sticker) { try { recordStickerSent(String(destination.group_id ?? ""), sticker.id); } catch {} }
-    onSent(sent, { stickerId: sticker?.id ?? null });
+    if (sticker && !sent?.privacyBlocked) { try { record(destination.message_type === "group" ? String(destination.group_id) : conversationId, sticker.id, stickerContentKey(sticker)); sentAt.set(conversationId, Date.now()); } catch {} }
+    onSent(sent, { stickerId: sent?.privacyBlocked ? null : sticker?.id ?? null });
   }
   catch (error) { if (sticker) sentAt.delete(conversationId); throw error; }
+  finally { if (sticker) sendingStickers.delete(conversationId); }
   return true;
 }

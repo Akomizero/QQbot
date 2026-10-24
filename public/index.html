@@ -68,6 +68,24 @@
           <p><strong>本地管理</strong><span>管理页和 NapCat WebSocket 桥接只绑定在这台电脑的回环地址。密钥只允许写入，不会从服务端回显。</span></p>
         </section>
 
+        <section class="runtime-overview" aria-label="运行状态总览">
+          <button class="overview-card" type="button" data-jump-page="access">
+            <span class="overview-label">QQ 连接</span>
+            <strong id="overview-onebot">正在检查 OneBot…</strong>
+            <span class="overview-action">查看群与权限</span>
+          </button>
+          <button class="overview-card" type="button" data-jump-page="chat">
+            <span class="overview-label">回复模型</span>
+            <strong id="overview-model">正在检查模型配置…</strong>
+            <span class="overview-action">查看模型设置</span>
+          </button>
+          <button class="overview-card" type="button" data-jump-page="chat" data-open-settings-group="search-sources">
+            <span class="overview-label">联网搜索</span>
+            <strong id="overview-search">正在检查搜索配置…</strong>
+            <span class="overview-action">查看搜索来源</span>
+          </button>
+        </section>
+
         <nav class="management-nav" aria-label="管理功能" role="tablist">
           <button type="button" role="tab" data-page="chat">聊天设置</button>
           <button type="button" role="tab" data-page="personas">分群人设</button>
@@ -142,11 +160,12 @@
               <input id="command-aliases" autocomplete="off" placeholder="例如：hello, hi, 你好">
               <p class="field-hint">用逗号分隔多个写法，别名也会触发这条指令。</p>
 
+              <div id="command-template-field"><label for="command-template">从模板创建</label><select id="command-template"><option value="blank">空白回复</option><option value="time">当前时间</option><option value="dice">随机骰子</option></select></div>
               <label for="command-type">回复方式</label>
               <select id="command-type">
                 <option value="text">固定文本</option>
-                <option value="time">当前时间</option>
-                <option value="dice">随机骰子</option>
+                <option value="time" hidden>当前时间（旧类型）</option>
+                <option value="dice" hidden>随机骰子（旧类型）</option>
                 <option value="echo">重复输入内容</option>
               </select>
               <p id="type-hint" class="field-hint type-hint">可在回复内容里使用 {{input}} 插入用户输入。</p>
@@ -174,7 +193,7 @@
             </div>
             <div class="key-statuses">
               <span id="api-key-status" class="key-status">正在检查模型 API key…</span>
-              <span id="tavily-key-status" class="key-status">正在检查网页搜索 key…</span>
+              <span id="search-key-status" class="key-status">正在检查网页搜索 key…</span>
             </div>
           </div>
           <form id="llm-settings-form">
@@ -220,6 +239,7 @@
               <div class="settings-field settings-prompt">
                 <label for="llm-memory">默认记忆 / 私聊常识</label>
                 <textarea id="llm-memory" rows="4" maxlength="4000"></textarea>
+                <label for="llm-memory-users">允许使用上述非敏感记忆的私聊账号</label><input id="llm-memory-users" placeholder="QQ号，以逗号分隔；留空不在回复中使用"><p class="field-hint">只对指定账号的私聊生效，不带入任何群。账号、身份关系、密钥等内容始终排除；旧记忆不会自动公开。</p>
                 <p class="field-hint">这些内容会作为独立的背景上下文提供给模型，不代表机器人亲历或核实过；不会改变白名单或实际权限。</p>
               </div>
               <div class="settings-field settings-toggle">
@@ -247,13 +267,21 @@
                 </select>
                 <p class="field-hint">Serper 模式下所有网页搜索统一走 Google 结果接口，不自动换源；连接超时、临时服务错误和限流最多自动补试2次，总时限40秒。密钥拒绝或账户额度不足不补试。正文通过独立工具直接读取原网页。Tavily 模式保留 Exa / B站备用。群聊缓存和梗词库在本机检索，不发送给搜索服务；相关片段会交给当前模型组织回答。</p>
               </div>
-              <div class="settings-field">
+              <div class="settings-field" data-search-provider-field="serper">
                 <label for="serper-api-key">Serper API key（只写入，不回显）</label>
                 <input id="serper-api-key" type="password" maxlength="2048" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="留空保持现有密钥">
                 <p class="field-hint">单独保存在服务端 .env，不使用模型或 Tavily 的密钥。</p>
               </div>
-              <div class="settings-field settings-toggle">
+              <div class="settings-field settings-toggle" data-search-provider-field="serper">
                 <label for="clear-serper-api-key"><input id="clear-serper-api-key" type="checkbox">清除 Serper API key</label>
+              </div>
+              <div class="settings-field" data-search-provider-field="tavily">
+                <label for="tavily-api-key">Tavily API key（只写入，不回显）</label>
+                <input id="tavily-api-key" type="password" maxlength="2048" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="留空保持现有密钥">
+                <p class="field-hint">用于 Tavily 搜索和正文提取；留空会保留当前密钥，备用 Exa / B站仍按现有规则工作。</p>
+              </div>
+              <div class="settings-field settings-toggle" data-search-provider-field="tavily">
+                <label for="clear-tavily-api-key"><input id="clear-tavily-api-key" type="checkbox">清除 Tavily API key</label>
               </div>
               <div class="settings-field">
                 <label for="search-country">搜索地区</label>
@@ -377,7 +405,10 @@
             </div>
             <div class="form-error" id="llm-settings-error" role="alert" hidden></div>
             <div class="settings-actions">
-              <p class="field-hint" id="local-config-check" role="status" aria-live="polite">本地检查只验证接口格式和 key 配置状态，不会向模型服务发送请求。</p>
+              <div class="settings-save-copy">
+                <p class="save-state" id="settings-save-status" role="status">当前设置已加载。</p>
+                <p class="field-hint" id="local-config-check" role="status" aria-live="polite">本地检查只验证接口格式和 key 配置状态，不会向模型服务发送请求。</p>
+              </div>
               <div class="settings-action-buttons">
                 <button class="button button-secondary" id="check-local-config" type="button">检查本地配置</button>
                 <button class="button button-primary" type="submit">保存模型设置</button>
@@ -403,7 +434,7 @@
                 <div class="settings-field settings-prompt"><label for="persona-style">本群表达风格</label><textarea id="persona-style" rows="3" maxlength="1000" required></textarea></div>
               </div>
               <details class="settings-group"><summary>本群长期记忆与系统提示</summary><div class="settings-grid">
-                <div class="settings-field"><label for="persona-memory">本群长期记忆</label><textarea id="persona-memory" rows="5" maxlength="4000" placeholder="只在这个群使用的角色背景、互动偏好和常识"></textarea><p class="field-hint">留空表示这个群没有额外记忆，不会读取其他群的人设或记忆。群聊知识库仍按来源群隔离。</p></div>
+                <div class="settings-field"><label for="persona-memory">本群长期记忆</label><textarea id="persona-memory" rows="5" maxlength="4000" placeholder="只在这个群使用的角色背景、互动偏好和常识"></textarea><label><input id="persona-memory-reply" type="checkbox">允许在本群回复中使用其中的非敏感常识</label><p class="field-hint">这是向本群公开使用的授权；旧记录默认关闭。账号、内部身份关系和私人资料始终排除，不会带入其他群或私聊。成员印象请逐条设置回复授权。</p></div>
                 <div class="settings-field"><label for="persona-system-prompt">本群系统提示</label><textarea id="persona-system-prompt" rows="5" maxlength="4000" required></textarea><p class="field-hint">更换角色名称时请同步调整这里的身份描述。实际权限、隐私要求和图片检查由程序统一控制。</p></div>
               </div></details>
             </fieldset>
@@ -419,25 +450,26 @@
             <details><summary>正在观察的反馈</summary><div id="personality-growth-candidates" class="preference-rules"></div></details>
             <details><summary>成长与撤回记录</summary><div id="personality-growth-journal" class="preference-rules"></div></details>
             <div class="form-actions"><button id="refresh-personality-growth" type="button" class="button button-quiet">刷新成长记录</button><button id="rollback-personality-growth" type="button" class="button button-quiet">撤回最近一次成长</button><button id="unblock-personality-growth" type="button" class="button button-quiet" hidden>允许重新学习撤回方向</button></div>
-            <p class="field-hint">至少3条独立反馈、2种不同表达，跨度至少30分钟，并来自两位成员或跨两个自然日；每次只调一个方向，至少间隔6小时。意见冲突先观察，不因几句起哄改变性格。记录只保留习惯、来源指纹和时间，不保存完整对话或编造心情；反思与原对话整理合用一次模型请求，不向群里发送成长进度。</p>
+            <p class="field-hint">明确反馈可以用疑问句表达，例如“能不能短一点？”。至少3条独立反馈、2种不同表达，跨度至少30分钟，并来自两位成员或跨两个自然日；每次只调一个方向，至少间隔6小时。意见冲突先观察，不因几句起哄改变性格。记录只保留习惯、来源指纹和时间，不保存完整对话或编造心情；反思与原对话整理合用一次模型请求，不向群里发送成长进度。</p>
           </details>
         </section>
 
         <section class="settings-panel" id="page-visual" data-management-page="visual" role="tabpanel" aria-label="角色视觉记忆">
-          <div class="settings-heading"><div><p class="eyebrow">VISUAL MEMORY</p><h2>角色视觉记忆</h2><p>群友纠正先待核实，再联网读正文、对照参考图。游戏资料先查维基百科，再补游戏Wiki与官方页面；姓名、作品和独特画面特征都有充分证据时自动采用，不必逐条确认。重复附和、搜索摘要或只搜到名字都不算核实；资料不足、冲突或搜索失败时保留候选。</p></div><button type="button" class="button button-quiet" id="refresh-visual">刷新角色记忆</button></div>
+          <div class="settings-heading"><div><p class="eyebrow">VISUAL MEMORY</p><h2>角色视觉记忆</h2><p>明确的单图角色纠正通过基本图片内容检查后，先保存为本群临时标注，无需等联网核实。同图可参考之前的群内标注，仍注明未核实；不同图只作弱提示，结合当前画面判断。出现同图不同说法或可靠资料冲突时，暂停自动使用，保留双方来源供复审。</p></div><button type="button" class="button button-quiet" id="refresh-visual">刷新角色记忆</button></div>
+          <p class="field-hint" role="status" id="visual-workflow-status">正在确认当前服务是否支持临时标注与冲突复审…</p>
           <div class="settings-grid">
             <div class="settings-field"><label for="visual-group">选择角色记忆所属群</label><select id="visual-group"></select><p class="field-hint">本群条目与已启用的通用参考会一起显示，并标明归属。群友纠正仍仅属于来源群；编辑通用条目时点击「管理通用参考」。</p></div>
-            <div class="settings-field settings-toggle"><label for="visual-memory-learning-enabled"><input id="visual-memory-learning-enabled" type="checkbox">从角色纠正中学习，并联网核对后采用</label><p class="field-hint">可附一张图说「这个是鸣潮的达妮娅」，或引用图片纠正；也可在本人发图后3分钟内说明。已有库存表情可引用bot发出的表情纠正。多人多图不明确时不自动绑定。需开启识图、角色辨认与联网搜索；关闭搜索时只保留候选。</p></div>
+            <div class="settings-field settings-toggle"><label for="visual-memory-learning-enabled"><input id="visual-memory-learning-enabled" type="checkbox">从明确角色纠正中保存本群临时标注</label><p class="field-hint">可附一张图说「这个是鸣潮的达妮娅」，或引用图片纠正；也可在本人发图后3分钟内说明。已有库存表情可引用bot发出的表情纠正。仅记虚构角色，需开启识图和角色辨认；单图关联不清楚或内容检查未通过时不保存。搜索关闭、失败或证据不足时仍可保存临时标注；后台核对可补充证据，冲突时再复审，不会升级成通用记忆。</p></div>
           </div>
           <p class="field-hint" role="status" id="visual-status">正在读取…</p>
-          <div class="knowledge-filters"><input id="visual-filter" placeholder="搜索角色、作品或特征…" aria-label="筛选角色记忆"><select id="visual-filter-status" aria-label="角色记忆状态"><option value="all">全部状态</option><option value="candidate">待核实</option><option value="confirmed">已启用参考</option><option value="disabled">已停用</option><option value="rejected">已拒绝</option></select></div>
+          <div class="knowledge-filters"><input id="visual-filter" placeholder="搜索角色、作品或特征…" aria-label="筛选角色记忆"><select id="visual-filter-status" aria-label="角色记忆状态"><option value="all">全部状态</option><option value="provisional">临时标注（本群、未核实）</option><option value="disputed">待复审（暂停使用）</option><option value="candidate">旧候选（未使用）</option><option value="confirmed">已启用参考</option><option value="disabled">已停用</option><option value="rejected">已拒绝</option></select></div>
           <div class="knowledge-grid"><div id="visual-list" class="command-list"></div>
             <form id="visual-form" class="knowledge-editor" hidden>
               <h3>编辑角色标注</h3><p class="field-hint">只确认虚构角色；编辑不会改变对应的图片或来源群。</p>
               <div class="settings-field"><label for="visual-name">角色名</label><input id="visual-name" maxlength="60" required></div>
               <div class="settings-field"><label for="visual-work">作品名</label><input id="visual-work" maxlength="80" placeholder="确认启用时必填"></div>
               <div class="settings-field"><label for="visual-traits">可见特征，每行一条</label><textarea id="visual-traits" rows="5" required placeholder="填写2至8条服装、发饰等特征"></textarea></div>
-              <div class="settings-field"><label for="visual-entry-status">使用状态</label><select id="visual-entry-status"><option value="candidate">待核实，不用于识图</option><option value="confirmed">确认并启用</option><option value="disabled">停用</option><option value="rejected">拒绝此标注</option></select></div>
+              <div class="settings-field"><label for="visual-entry-status">使用状态</label><select id="visual-entry-status"><option value="provisional">临时标注（本群、未核实）</option><option value="disputed">待复审（暂停使用）</option><option value="candidate">撤回使用，保留为旧候选</option><option value="confirmed">确认并启用</option><option value="disabled">停用</option><option value="rejected">拒绝此标注</option></select><p class="field-hint">选定临时标注或确认启用时，同群同图其他标注会停用并保留证据。也可撤回、暂停复审、拒绝、停用或删除；编辑不会改变所属群。</p></div>
               <div class="form-actions"><button class="button button-primary" type="submit">保存角色记忆</button><button class="button button-quiet" id="cancel-visual" type="button">取消</button></div>
             </form>
           </div>
@@ -447,15 +479,15 @@
         <section class="settings-panel" id="page-knowledge" data-management-page="knowledge" role="tabpanel" aria-label="本地知识库">
           <div class="settings-heading">
             <div><p class="eyebrow">KNOWLEDGE</p><h2>本地知识库</h2><p>每个群独立积累和检索知识，手动添加也只属于当前选中的群；私聊资料另行维护。命中片段会提供给当前模型。</p></div>
-            <div><button class="button button-quiet" id="extract-knowledge" type="button">立即提炼</button><button class="button button-secondary" id="add-knowledge" type="button">添加知识</button></div>
+            <div><button class="button button-quiet" id="extract-knowledge" type="button">整理本群对话</button><button class="button button-secondary" id="add-knowledge" type="button">添加知识</button></div>
           </div>
           <div class="settings-field"><label for="knowledge-group">选择知识库所属群</label><select id="knowledge-group" aria-label="选择知识库所属群"><option value="">正在读取…</option></select><p class="field-hint">切换后只显示本群条目、积累状态和试搜结果。保存或提炼不会改动其他群的知识。</p></div>
           <div id="knowledge-switches" class="feature-switches">
             <div class="settings-field settings-toggle"><label for="knowledge-learning-enabled"><input id="knowledge-learning-enabled" type="checkbox">从群友聊天中积累知识</label><p class="field-hint">群友解释网梗、群内称呼或互动背景，单人也可形成待确认候选；个人喜好和日常对话观察显示在「成员印象」。普通聊天合并提炼，每群至少间隔5分钟，不再设每日12次上限。明确教学消息优先保留；断连会重试有效短期缓冲，不保存完整原始聊天记录。</p></div>
           </div>
-          <p id="knowledge-learning-status" class="field-hint" role="status">正在读取积累状态…</p>
-          <details class="settings-group"><summary>记忆维护与常用索引</summary><p class="field-hint">常用词先给简短背景，需要细节时再检索完整知识库。每小时在本机整理一次：合并完全重复的自动条目，长期未获支持的候选归档保留；已确认知识不会因冷门被删掉。这里的召回次数只代表检索提供过材料，不代表模型一定采用。</p><p id="knowledge-maintenance-status" class="field-hint" role="status">正在读取…</p><button id="maintain-knowledge-memory" type="button" class="button button-quiet">整理本群记忆</button></details>
-          <button type="button" class="button button-quiet" id="show-knowledge-candidates">查看待确认知识</button>
+          <p id="knowledge-dialogue-task-status" class="field-hint" role="status"></p><p id="knowledge-learning-status" class="field-hint" role="status">正在读取积累状态…</p>
+          <details class="settings-group"><summary>本群记忆维护与常用索引</summary><p class="field-hint">知识库和成员印象页是同一群级维护操作的快捷入口，同时整理两类记忆；不同于上方从新对话学习。</p><p class="field-hint">常用词先给简短背景，需要细节时再检索完整知识库。每小时在本机整理一次：合并完全重复的自动条目，长期未获支持的候选归档保留；已确认知识不会因冷门被删掉。这里的召回次数只代表检索提供过材料，不代表模型一定采用。</p><p id="knowledge-maintenance-status" class="field-hint" role="status">正在读取…</p><button id="maintain-knowledge-memory" type="button" class="button button-quiet">整理本群记忆</button></details>
+
           <div class="knowledge-filters"><input id="knowledge-filter" placeholder="找标题、关键词或正文…" aria-label="筛选知识"><select id="knowledge-origin-filter" aria-label="知识来源"><option value="all">当前知识</option><option value="manual">手动添加</option><option value="learned">群聊已学会</option><option value="candidate">待确认</option><option value="rejected">已拒绝</option><option value="archived">已归档（可恢复）</option></select></div>
           <p class="field-hint" id="knowledge-count" role="status">正在读取…</p>
           <div class="knowledge-grid">
@@ -485,7 +517,7 @@
           <p class="field-hint">收藏前检查内容，过滤血腥、排泄物、腐烂污物等令人反胃的图片；动图检查全部帧。检查失败时不收藏、不发送。已有表情会补查，待检查期间暂停使用。</p>
           <p class="field-hint">接梗规则：呼唤肥鱼并发「token来」和图片，会回「token回」并复用原图；原图也需通过内容检查。</p>
           <p id="sticker-count" class="field-hint" role="status">正在读取…</p>
-          <details class="settings-group" open><summary>本群表情使用偏好</summary><div class="settings-field"><label for="sticker-preference-group">选择群</label><select id="sticker-preference-group"></select><p class="field-hint">群友说“别发某某表情”会形成待确认偏好，并临时避开15分钟；管理员确认后持续禁用，只影响本群。自动选图还会避开10分钟内最近使用的3张。</p><div id="sticker-preference-rules" class="preference-rules"></div><div class="form-actions"><input id="sticker-block-term" maxlength="30" placeholder="本群不使用的角色或关键词" aria-label="禁用表情关键词"><button type="button" class="button button-quiet" id="add-sticker-block-term">添加本群禁用词</button></div></div></details>
+          <details class="settings-group" open><summary>本群表情使用偏好</summary><div class="settings-field"><label for="sticker-preference-group">选择群</label><select id="sticker-preference-group"></select><p class="field-hint">群友说“别发某某表情”会形成待确认偏好，并临时避开15分钟；管理员确认后持续禁用，只影响本群。自动选图避开10分钟内最近使用的3张，并避免连续使用同一图片（含重复入库的副本）；没有合适的新候选就只发文字。每群学习容量20张，仍保留全库与每日判断限制。</p><div id="sticker-preference-rules" class="preference-rules"></div><div class="form-actions"><input id="sticker-block-term" maxlength="30" placeholder="本群不使用的角色或关键词" aria-label="禁用表情关键词"><button type="button" class="button button-quiet" id="add-sticker-block-term">添加本群禁用词</button></div></div></details>
           <div class="knowledge-grid">
             <div id="sticker-list" class="sticker-list"></div>
             <form id="sticker-form" class="knowledge-editor" hidden>
@@ -508,9 +540,9 @@
             <div class="settings-field settings-toggle"><label for="member-impressions-enabled"><input id="member-impressions-enabled" type="checkbox" checked>在相关对话中使用本群成员印象</label></div>
             <div class="settings-field settings-toggle"><label for="member-impressions-learning-enabled"><input id="member-impressions-learning-enabled" type="checkbox" checked>从与AI的日常对话中逐步形成印象</label><p class="field-hint">不用说“记住”：话题和互动先成为初步观察，多次独立对话支持后自动启用；单次提问不等于喜欢某事。成员积累不设每日次数额度，合并发言并至少间隔5分钟整理，可与知识提炼合用一次请求。明确的新偏好可修正自动印象；初步观察14天未获支持会归档，已形成的对话观察60天未获支持会淡出、120天归档。管理员确认、拒绝和暂停会保留。</p></div>
           </div>
-          <div class="member-toolbar"><div class="settings-field"><label for="member-group">所属群</label><select id="member-group"></select></div><input id="member-filter" aria-label="搜索成员昵称或QQ号" placeholder="搜索昵称或QQ号"><button class="button button-quiet" id="extract-member-impressions" type="button">提炼当前缓冲</button><button class="button button-primary" id="add-member" type="button">添加成员</button></div>
-          <p id="member-learning-status" class="field-hint" aria-live="polite">正在读取本群积累状态。</p><p id="member-count" class="field-hint"></p>
-          <details class="settings-group"><summary>记忆维护</summary><p class="field-hint">完全重复的自动印象合并证据；未获支持的初步观察14天后归档，对话观察60天未获支持淡出、120天归档。归档保留内容，可进入成员编辑后恢复。管理员确认、拒绝与暂停积累的记录不自动覆盖。</p><p id="member-maintenance-status" class="field-hint" role="status">正在读取…</p><button id="maintain-member-memory" type="button" class="button button-quiet">整理本群记忆</button></details>
+          <div class="member-toolbar"><div class="settings-field"><label for="member-group">所属群</label><select id="member-group"></select></div><input id="member-filter" aria-label="搜索成员昵称或QQ号" placeholder="搜索昵称或QQ号"><button class="button button-quiet" id="extract-member-impressions" type="button">整理本群对话</button><button class="button button-primary" id="add-member" type="button">添加成员</button></div>
+          <p id="member-dialogue-task-status" class="field-hint" role="status"></p><p id="member-learning-status" class="field-hint" aria-live="polite">正在读取本群积累状态。</p><p id="member-count" class="field-hint"></p>
+          <details class="settings-group"><summary>本群记忆维护</summary><p class="field-hint">与知识库页共用选群和维护任务，同时整理本群知识及成员印象；不触发新对话学习。</p><p class="field-hint">完全重复的自动印象合并证据；未获支持的初步观察14天后归档，对话观察60天未获支持淡出、120天归档。归档保留内容，可进入成员编辑后恢复。管理员确认、拒绝与暂停积累的记录不自动覆盖。</p><p id="member-maintenance-status" class="field-hint" role="status">正在读取…</p><button id="maintain-member-memory" type="button" class="button button-quiet">整理本群记忆</button></details>
           <div class="member-layout"><div id="member-list" class="command-list"></div>
             <form id="member-form" class="knowledge-editor" hidden>
               <h3 id="member-editor-title">成员印象</h3>

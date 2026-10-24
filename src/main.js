@@ -33,7 +33,7 @@ import { growthLearningStamp } from "./personality-growth.js";
 import { addLearnedSticker, approveStickerForSending, sendLlmResult, readSticker } from "./sticker-store.js";
 import { queueVisualCorrection, noteVisualLearningMissingImage } from "./visual-learning.js";
 import { isVisualCorrectionText } from "./visual-memory-store.js";
-import { canLearnSticker, learnIncomingStickers, queuePendingStickerDescriptions, queueStickerDescription, stopStickerLearning } from "./sticker-learning.js";
+import { canLearnSticker, learnIncomingStickers, queuePendingStickerDescriptions, queueStickerDescription, stopStickerLearning, noteStickerLearning } from "./sticker-learning.js";
 import { queueConversationReply, paceOneBotMessage, paceOneBotMessages } from "./reply-queue.js";
 import { sendReplyWithFolding, buildDirectReplyParts, buildLongReply } from "./long-reply.js";
 import { rememberGroupLine, warmGroupContext, isPossibleBotFollowup, recentGroupContext, clearGroupConversations, findGroupLine } from "./conversation-context.js";
@@ -45,8 +45,15 @@ import { startConfiguredModelProxy } from "./local-model-proxy.js";
 import { closeModelConnections } from "./model-transport.js";
 import { rememberGroupImages, resolveRecentGroupImages, clearRecentGroupImages, canUseRecentGroupImages } from "./recent-group-images.js";
 import { hasForwardMessage, rememberForwardMessage, resolveForwardSource, readForwardedMessages, clearForwardContext, ForwardReadError } from "./forward-input.js";
+import { createServiceHealth } from "./service-health.js";
+import { ensureBrowserRuntime } from "./imagegen-runtime.js";
+import { startDesktopLifecycle } from "./desktop-lifecycle.js";
+import { isStickerCollectionRequest, isExactImageReturnRequest, rememberImageExchange, resolveImageExchange, noteImageExchange, markPendingImageReturn, hasPendingImageReturn, clearPendingImageReturn, canUseImageExchange } from './image-exchange.js';
+import { cachedOriginalImage, sendExactImage } from './exact-image-return.js';
+import { createHash } from 'node:crypto';
 
 const sensitiveValues = new Set();
+let serviceHealth;
 const seenMessageIds = new Map();
 const passiveGroupContexts = new Map();
 const pendingGroupTurnTimers = new Map();
@@ -139,23 +146,19 @@ function looksLikeSticker(segment) {
   return Number(segment?.data?.sub_type) === 1 || isMarketFaceImage(segment) || /\.gif$/iu.test(segment?.data?.file ?? "");
 }
 
-function isStickerCollectionRequest(text) {
-  return /(?:给你(?:当|做|作|用作)?(?:个|一张|一些)?表情包?|(?:这张|这个).{0,8}(?:当|做).{0,4}表情|(?:收藏|保存|收下|学会|添加).{0,12}(?:表情包?|这张(?:图)?|这(?:个|些)图))/u.test(text);
-}
-
-async function readIncomingImages(images, sendMessage, { collectSources = false, maxCount = MAX_IMAGE_COUNT } = {}) {
+async function readIncomingImages(images, sendMessage, { collectSources = false, maxCount = MAX_IMAGE_COUNT, originals = [] } = {}) {
   if (!Number.isInteger(maxCount) || maxCount < 1 || maxCount > 9 || !Array.isArray(images) || images.length > maxCount) throw new ImageInputError(`一次最多处理 ${maxCount <= 9 ? maxCount : MAX_IMAGE_COUNT} 张图片，请减少图片数量后再试。`);
   const prepared = [];
   let totalBytes = 0;
   let totalSourceBytes = 0;
-  for (const segment of images) {
+  for (const [index,segment] of images.entries()) {
     const file = segment?.data?.file;
     if (!isNapCatImageFile(file)) throw new ImageInputError("这张图片的 QQ 文件标识无法识别，请从 QQ 重新发送图片或表情。");
     const imageOptions = {
       remainingSourceBytes: MAX_TOTAL_SOURCE_IMAGE_BYTES - totalSourceBytes,
       includeSourceBytes: collectSources,
     };
-    const image = segment.forwardedNumber && segment.data.url
+    const image = originals[index] ? await prepareNapCatImageBase64(originals[index].toString('base64'), MAX_TOTAL_IMAGE_BYTES-totalBytes,imageOptions) : segment.forwardedNumber && segment.data.url
       ? await prepareNapCatImageUrl(segment.data.url, MAX_TOTAL_IMAGE_BYTES - totalBytes, imageOptions)
       : await prepareNapCatImageBase64((await sendMessage("get_image", { file }))?.base64, MAX_TOTAL_IMAGE_BYTES - totalBytes, imageOptions);
     if (image.byteLength > MAX_IMAGE_BYTES) throw new ImageInputError("这张图片超过 4 MB，请压缩后重新发送。");
@@ -170,7 +173,7 @@ async function observeGroupStickers(images, authorized, sendMessage) {
   if (!Array.isArray(images) || images.length > MAX_IMAGE_COUNT || pendingStickerGroups.has(authorized.groupId)
     || pendingStickerGroups.size >= 128 || !canLearnSticker(authorized.groupId)) return;
   const stickers = images.filter(looksLikeSticker);
-  if (!stickers.length) return;
+  if (!stickers.length) { noteStickerLearning(authorized.groupId, "not-qq-sticker-or-gif"); return; }
   pendingStickerGroups.add(authorized.groupId);
   try {
     let prepared;
@@ -182,6 +185,7 @@ async function observeGroupStickers(images, authorized, sendMessage) {
     await learnIncomingStickers({ groupId: authorized.groupId, images: prepared });
   } catch {
     // Unmentioned stickers may be learned silently; ordinary group chat gets no error reply.
+    noteStickerLearning(authorized.groupId, "image-load-or-review-failed");
   } finally { pendingStickerGroups.delete(authorized.groupId); }
 }
 
@@ -548,8 +552,8 @@ async function handleMessage(event, { sendMessage }, config) {
       const correctionImages = authorized.imageReference?.images ?? imageSegments(event.message);
       const relatedStickerId = authorized.messageContext?.reply?.stickerId;
       if (correctionImages?.length || relatedStickerId) try {
-        queueVisualCorrection({ groupId: authorized.groupId, text: authorized.content, messageId: event.message_id,
-          sourceMessageId: authorized.imageReference?.messageId ?? event.message_id, relatedStickerId,
+        queueVisualCorrection({ groupId: authorized.groupId, senderId: authorized.userId, text: authorized.content, messageId: event.message_id,
+          sourceMessageId: authorized.imageReference?.messageId ?? (relatedStickerId ? authorized.messageContext?.reply?.id : null) ?? event.message_id, relatedStickerId,
           loadImages: async () => correctionImages?.length ? readIncomingImages(correctionImages, sendMessage)
             : [await prepareNapCatImageBase64(readSticker(relatedStickerId, { approvedOnly: true }).bytes.toString("base64"), MAX_TOTAL_IMAGE_BYTES)] });
       } catch {}
@@ -593,9 +597,21 @@ async function handleMessage(event, { sendMessage }, config) {
       } catch { authorized.memberMemoryAction = "failed"; }
     }
   }
+  if (!hasForwardMessage(event.message)) {
+    const current=settingsForGroup(readLlmSettings(),authorized.groupId),context={scope:authorized.scope,groupId:authorized.groupId,userId:authorized.userId,selfId:String(event.self_id),since:current.groupPersonaSince||0,text:authorized.content};
+    const pending=hasPendingImageReturn(context),direct=current.visionEnabled?rememberImageExchange(event,context):null;
+    const continuing=pending&&(Boolean(direct)&&!authorized.content||/^第\s*[1-9]\s*张[。！!]?$/u.test(authorized.content));
+    const collect=isStickerCollectionRequest(authorized.content)||Boolean(continuing&&pending.collect),exact=isExactImageReturnRequest(authorized.content)||Boolean(continuing);
+    if ((collect||exact)&&!messageReferences(event.message).mentions.some(id=>id!==context.selfId)) {
+      const resolution=direct&&(direct.images.length===1||collect&&!exact)?{status:'resolved',reference:direct}:await resolveImageExchange(event,context,{sendAction:sendMessage});
+      authorized.imageExchange={...resolution,context,collect,exact};
+      if(authorized.scope==='group'&&(collect||resolution.status==='resolved'||resolution.status==='ambiguous'))authorized.mentioned=true;
+    }
+  }
   const task = async () => {
     const latest = readAccessControl();
     if (authorized.scope === "group" ? !latest.groupIds.includes(authorized.groupId) : !latest.userIds.includes(authorized.userId)) return;
+    if(authorized.imageExchange?.reference&&!canUseImageExchange(authorized.imageExchange.reference,authorized.imageExchange.context,{quoted:authorized.imageExchange.quoted}))authorized.imageExchange={...authorized.imageExchange,status:'expired',reference:null};
     if (authorized.imageReference && !canUseRecentGroupImages(authorized.imageReference, {
       groupId: authorized.groupId, since: settingsForGroup(readLlmSettings(), authorized.groupId).groupPersonaSince,
     })) {
@@ -650,9 +666,9 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
   const searchIntent = parseSearchIntent(authorized.content);
   const summaryIntent = parseSummaryIntent(authorized.content);
   const imageGenerationIntent = parseImageGenerationIntent(authorized.content, settingsForGroup(readLlmSettings(), authorized.groupId).botAliases);
-  let images = authorized.imageReference?.images ?? imageSegments(event.message);
+  let images = authorized.imageExchange?.reference?.images ?? authorized.imageReference?.images ?? imageSegments(event.message);
   let imageRequested = images === null || images.length > 0;
-  if (!authorized.recoveryJob && !imageGenerationIntent && authorized.scope === "group" && command.kind === "none"
+  if (!authorized.recoveryJob && !imageGenerationIntent && !authorized.imageExchange && authorized.scope === "group" && command.kind === "none"
     && segmentsOf(event.message).every((segment) => ["text", "at", "image", "reply"].includes(segment?.type))) {
     try { observeKnowledgeMessage({ groupId: authorized.groupId, userId: authorized.userId, text: authorized.content.replaceAll("[QQ表情]", "").trim(), settings: readLlmSettings(),
       messageId: event.message_id, relatedStickerId: authorized.messageContext?.reply?.stickerId,
@@ -708,6 +724,15 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     settings = readLlmSettings();
   } catch {
     return;
+  }
+
+  if(authorized.imageExchange){
+    const exchange=authorized.imageExchange;
+    if(!settings.stickersEnabled){if(exchange.reference)noteImageExchange(exchange.reference,exchange.context,{collectionState:exchange.collect?'disabled':undefined});await sendText('表情包功能当前已关闭；这次没有收藏或回发原图。');return;}
+    if(exchange.status!=='resolved'){
+      if(exchange.exact||exchange.status==='ambiguous')markPendingImageReturn(event,exchange.context,{collect:exchange.collect});
+      await sendText(exchange.status==='ambiguous'?`刚才有 ${exchange.count} 张图，请说“第1张/第2张”或引用要回发的那张。`:exchange.status==='expired'?'刚才图片的短期关联已过期，请引用原消息或重新发送；我不能据此说之前没有收到。':'这次没能关联到你要的原图，请引用原消息或重新发送；尚未确认收藏结果。');return;
+    }
   }
 
   if (imageGenerationIntent) {
@@ -825,7 +850,8 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
   }
   let preparedImages = [];
   const tokenExchange = !authorized.recoveryJob && !forwardedMessages && /\btoken\s*来/iu.test(authorized.content) && imageRequested;
-  const explicitStickerRequest = !authorized.recoveryJob && !forwardedMessages && authorized.scope === "group" && authorized.mentioned && isStickerCollectionRequest(authorized.content);
+  const explicitStickerRequest = !authorized.recoveryJob && !forwardedMessages && Boolean(authorized.imageExchange?.collect);
+  const exactImageRequest = !authorized.recoveryJob && !forwardedMessages && Boolean(authorized.imageExchange?.exact);
   let reservedImageSlot = false;
   let videoProgressTimer;
   let waitingForVideo = true;
@@ -861,7 +887,8 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
     reservedImageSlot = true;
     try {
       preparedImages = await readIncomingImages(images, sendMessage, {
-        collectSources: !forwardedMessages && (tokenExchange || (authorized.scope === "group" && (settings.stickerLearningEnabled || explicitStickerRequest) && settings.stickersEnabled)),
+        collectSources: !forwardedMessages && (tokenExchange || exactImageRequest || explicitStickerRequest || (authorized.scope === "group" && settings.stickerLearningEnabled && settings.stickersEnabled)),
+        originals: authorized.imageExchange?.reference?.images.map((_image,index)=>cachedOriginalImage(authorized.imageExchange.reference,index,authorized.imageExchange.context)) ?? [],
       });
       preloadedImageDataUrls.push(...preparedImages.map((image) => image.dataUrl));
     } catch (error) {
@@ -883,7 +910,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       if (reservedImageSlot) { releaseImageSlot(); reservedImageSlot = false; }
       await prepareForwardReading(forwardedMessages, {
         allowed: forwardAllowed, userQuestion: authorized.content,
-        describe: options => describeForwardBatch({ ...options, apiKey: getCurrentLlmApiKey(), settings, allowed: () => forwardAllowed() && (options.allowed?.() ?? true) }),
+        describe: options => describeForwardBatch({ ...options, groupId: authorized.groupId, apiKey: getCurrentLlmApiKey(), settings, allowed: () => forwardAllowed() && (options.allowed?.() ?? true) }),
         withImages: async (refs, consume) => {
           await acquireImageSlot();
           try { if (!forwardAllowed()) return; return await consume(await readIncomingImages(refs, sendMessage, { maxCount: 9 })); }
@@ -906,16 +933,30 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       if (!readLlmSettings().stickersEnabled) { await sendText("表情包功能当前已关闭，请管理员在管理页开启后再试。"); return; }
       let saved = 0;
       let collectionError = "";
-      for (const image of preparedImages) {
+      const assets=preparedImages.map(image=>({id:null,sourceHash:image.sourceBytes?createHash('sha256').update(image.sourceBytes).digest('hex'):null,collectionState:'failed'}));
+      for (const [index,image] of preparedImages.entries()) {
         if (!image.sourceBytes) continue;
         try {
-          const sticker = await addLearnedSticker({ bytes: image.sourceBytes, groupId: authorized.groupId,
+          const sticker = await addLearnedSticker({ bytes: image.sourceBytes, groupId: authorized.groupId, userId: authorized.userId, scope: authorized.scope,
             title: "群友赠送的表情", tags: ["群友赠送", "接梗"], requested: true,
-            allowed: () => readLlmSettings().stickersEnabled && readAccessControl().groupIds.includes(authorized.groupId) });
-          if (sticker) { saved += 1; queueStickerDescription(sticker.id); }
-        } catch (error) { if (error.name === "StickerReviewError") collectionError = error.message; }
+            allowed: () => readLlmSettings().stickersEnabled && (authorized.scope==='group'?readAccessControl().groupIds.includes(authorized.groupId):readAccessControl().userIds.includes(authorized.userId)) });
+          if (sticker&&readSticker(sticker.id,{approvedOnly:true})) { saved += 1; assets[index]={...assets[index],id:sticker.id,collectionState:'saved'};queueStickerDescription(sticker.id); }
+        } catch (error) { assets[index].collectionState=error.rejected?'rejected':'failed';collectionError = error.name === 'StickerReviewError' ? error.message : '这次收藏的保存步骤没有完成，请稍后重试。'; }
       }
-      await sendText(saved ? "收下啦，合适的时候我就拿来接话～" : collectionError || "这次没能收藏，表情库可能已满，请管理员整理一下再试。");
+      authorized.imageExchange.collectionState=saved===preparedImages.length?'saved':saved?'partial':'failed';
+      noteImageExchange(authorized.imageExchange.reference,authorized.imageExchange.context,{collectionState:authorized.imageExchange.collectionState,assets});
+      if(!saved){await sendText(collectionError||'这次没有收藏成功，表情库可能已满，请管理员整理后重试。');return;}
+      if(!exactImageRequest){const disabled=assets.some(a=>a.id&&!readSticker(a.id,{enabledOnly:true}));const receipt=await sendText(saved===preparedImages.length?(disabled?'收藏记录已存在，但表情处于停用状态，本次不会回发。':`已收藏${saved>1?'这 '+saved+' 张':'这张'}表情；需要时可说“把刚才那张原样发回来”。`):`只收藏成功 ${saved}/${preparedImages.length} 张；第 ${assets.flatMap((a,i)=>a.id?[]:[i+1]).join('、')} 张没有收藏成功。`);if(!receipt?.cancelled)noteImageExchange(authorized.imageExchange.reference,authorized.imageExchange.context,{replyId:receipt?.message_id});return;}
+    }
+    if(exactImageRequest&&preparedImages.length){
+      const exchange=authorized.imageExchange,reference=exchange.reference;
+      if(preparedImages.length!==1){await sendText('有多张图片，请指出要原样回发的那一张。');return;}
+      try{
+        const returned=await sendExactImage({bytes:preparedImages[0].sourceBytes,context:exchange.context,destination:{message_type:authorized.scope,...(authorized.scope==='group'?{group_id:authorized.groupId}:{user_id:authorized.userId})},sendMessage,
+          collectionState:exchange.collectionState??reference.collectionState,allowed:()=>readLlmSettings().stickersEnabled&&readLlmSettings().visionEnabled&&canUseImageExchange(reference,exchange.context,{quoted:exchange.quoted})&&(authorized.scope==='group'?readAccessControl().groupIds.includes(authorized.groupId):readAccessControl().userIds.includes(authorized.userId))});
+        noteImageExchange(reference,exchange.context,{sendState:returned.state,replyId:returned.receipt?.message_id});clearPendingImageReturn(exchange.context);
+        if(returned.state!=='sent')await sendText(returned.explanation);
+      }catch(error){noteImageExchange(reference,exchange.context,{sendState:'failed'});await sendText(error.name==='StickerReviewError'?error.message:error.collectionConfirmed===true?'这张已收藏，但这次原图发送没有成功；可以稍后再让我原样回发。':'这次原图未能发出，也没有确认收藏成功。');}
       return;
     }
     const result = await getLlmReply({
@@ -925,7 +966,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
       userId: `${authorized.scope}:${authorized.groupId ?? authorized.userId}:${authorized.userId}`,
       senderQQId: authorized.userId,
       groupId: authorized.scope === "group" ? authorized.groupId : null,
-      userMessage: (summaryIntent ? authorized.content : searchIntent?.query ?? authorized.content) || (forwardedMessages ? "看看这段转发记录，简要说说主要内容和你的感受。" : ""),
+      userMessage: (summaryIntent ? authorized.content : searchIntent?.query ?? authorized.content) || (forwardedMessages ? "简要概括这段转发的主要内容；如有自己的看法，请与原文说法分开。" : ""),
       searchQuery: searchIntent?.query ?? null,
       attachments: [],
       preloadedImageDataUrls,
@@ -978,7 +1019,7 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
         && (authorized.scope !== "group" || result.memberImpressionGeneration === undefined || memberLearningStamp(authorized.groupId, authorized.userId).generation === result.memberImpressionGeneration)
         && (authorized.scope !== "group" || !result.groupPersonaRevision
         || settingsForGroup(readLlmSettings(), authorized.groupId).groupPersonaRevision === result.groupPersonaRevision)), { ...readLlmSettings(), onSent: (sent, metadata) => {
-        if (authorized.scope !== "group") return;
+        if (authorized.scope !== "group" || sent?.privacyBlocked) return;
         rememberGroupLine({ groupId: authorized.groupId, userId: "bot", text: result.reply || "[发送表情]", messageId: sent?.message_id, isBot: true, stickerId: metadata?.stickerId,
           targetUserId: authorized.userId, followup: Boolean(authorized.followup) });
         if (authorized.followup) try { acknowledgeGroupReply({ groupId: authorized.groupId, mentioned: true }); } catch {}
@@ -1037,7 +1078,26 @@ async function runRecoveredRequest(job, allowed, sendMessage, config) {
 }
 
 async function main() {
-  const config = getConfig();
+  let config, bridge, managementServer;
+  serviceHealth = createServiceHealth({
+    getOneBotStatus: () => ({ connected: bridge?.getStatus().connected === true, port: config?.onebotPort }),
+    getManagementListening: () => managementServer?.listening === true,
+    getSettings: () => {
+      const settings = readLlmSettings();
+      // Environment values are already loaded by normal config/key handling.
+      // Health receives flags only; it never loads key files or serializes settings.
+      const flags = Object.fromEntries(["searchEnabled", "visionEnabled", "characterRecognitionEnabled", "visualMemoryLearningEnabled",
+        "knowledgeEnabled", "knowledgeLearningEnabled", "memberImpressionsEnabled", "memberImpressionsLearningEnabled", "stickersEnabled",
+        "stickerLearningEnabled", "proactiveChatEnabled", "videoUnderstandingEnabled", "videoAsrEnabled", "videoFramesEnabled",
+        "chatgptImageGenerationEnabled", "videoDiscoveryEnabled"].map(key => [key, settings[key] === true]));
+      const modelKey = process.env.QQBOT_LLM_API_KEY?.trim();
+      const searchKey = settings.searchProvider === "serper" ? process.env.SERPER_API_KEY?.trim() : process.env.TAVILY_API_KEY?.trim();
+      return { ...flags, modelConfigured: Boolean(modelKey && modelKey !== "填入主线提供的APIKey" && settings.apiEndpoint && settings.model),
+        searchConfigured: Boolean(searchKey && searchKey !== "填入自行申请的TavilyAPIKey"),
+        videoDiscoveryHasScope: Array.isArray(settings.videoDiscoveryGroupIds) && settings.videoDiscoveryGroupIds.some(groupId => readAccessControl().groupIds.includes(groupId)) };
+    },
+  });
+  config = getConfig();
   sensitiveValues.add(config.onebotAccessToken);
   if (config.llmApiKey) sensitiveValues.add(config.llmApiKey);
   if (config.searchApiKey) sensitiveValues.add(config.searchApiKey);
@@ -1046,6 +1106,7 @@ async function main() {
   readLlmSettings();
   readAccessControl();
   ensureGroupPersonas(readAccessControl().groupIds, readLlmSettings());
+  serviceHealth.component("configuration", "ready", "startup-prechecks-completed");
 
   const controller = new AbortController();
   const stop = (signal) => {
@@ -1058,25 +1119,30 @@ async function main() {
   };
   const onSigint = () => stop("SIGINT");
   const onSigterm = () => stop("SIGTERM");
+  const desktopLifecycle = await startDesktopLifecycle(() => stop("desktop-exit"));
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
-  const bridge = createOneBotBridge({
+  bridge = createOneBotBridge({
     port: config.onebotPort,
     path: config.onebotPath,
     accessToken: config.onebotAccessToken,
     onMessage: (event, context) => handleMessage(event, context, config),
+    onStatus: () => { void serviceHealth.refresh(); },
   });
-  let managementServer;
   let modelProxy;
   let replyRecovery;
   let videoDiscovery;
   let memoryMaintenance;
   try {
     modelProxy = await startConfiguredModelProxy();
+    serviceHealth.component("modelProxy", modelProxy?.configured === true ? "started-unverified" : "disabled", "supervisor-initialized-no-runtime-probe");
     if (controller.signal.aborted) return;
     await bridge.start();
+    if (readLlmSettings().chatgptImageGenerationEnabled) void ensureBrowserRuntime().catch(() => {});
+    serviceHealth.component("onebot", "listening", "local-listener-started");
     memoryMaintenance = startMemoryMaintenance();
+    serviceHealth.component("memoryMaintenance", "started-unverified", "scheduler-initialized-no-task-proof");
     replyRecovery = startReplyRecovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected,
       run: (job, allowed) => runRecoveredRequest(job, allowed, bridge.sendMessage, config),
       pace:(action,params,sendAction,allowed,selfId)=> {
@@ -1089,17 +1155,20 @@ async function main() {
           sendReplyWithFolding({...queued,message:withoutQuote.message},sendAction,{settings,selfId,allowed}),allowed);
         return paceOneBotMessages(action,buildDirectReplyParts(params),sendAction,allowed);
       } });
+    serviceHealth.component("replyRecovery", "started-unverified", "scheduler-initialized-no-task-proof");
     videoDiscovery = startVideoDiscovery({ sendAction: bridge.sendMessage, connected: () => bridge.getStatus().connected, pace: paceOneBotMessage,
       onShared: ({ groupId, text, messageId }) => {
         rememberGroupLine({ groupId, userId: "bot", text, isBot: true, messageId });
         recordExternalProactiveReply({ groupId, text, messageId, pauseWhenIgnored: readLlmSettings().proactivePauseWhenIgnored });
       } });
+    serviceHealth.component("videoDiscovery", "started-unverified", "scheduler-initialized-no-task-proof");
     managementServer = await startManagementServer({
       getOneBotStatus: () => ({
         ...bridge.getStatus(),
         wsEndpoint: `ws://127.0.0.1:${config.onebotPort}${config.onebotPath}`,
       }),
       onLlmSettingsSaved: (settings) => {
+        void serviceHealth.refresh();
         if (getSearchApiKey("serper")) sensitiveValues.add(getSearchApiKey("serper"));
         if (!settings.conversationFollowupEnabled) clearGroupConversations();
         if (!settings.visionEnabled) clearRecentGroupImages();
@@ -1124,11 +1193,15 @@ async function main() {
         cancelPendingGroupTurn(groupId); passiveGroupContexts.delete(groupId);
       },
     });
+    serviceHealth.component("management", "listening", "local-server-listening");
     console.log("NapCat OneBot 11 桥接已启动，仅监听 127.0.0.1。");
     console.log(`WebSocket 接入地址：ws://127.0.0.1:${config.onebotPort}${config.onebotPath}`);
     queuePendingStickerDescriptions();
-    await new Promise((resolve) => controller.signal.addEventListener("abort", resolve, { once: true }));
+    serviceHealth.component("stickerDescriptions", "started-unverified", "queue-entry-initialized-not-executed");
+    serviceHealth.completeStartup();
+    if (!controller.signal.aborted) await new Promise((resolve) => controller.signal.addEventListener("abort", resolve, { once: true }));
   } finally {
+    await serviceHealth.stop();
     replyRecovery?.stop();
     videoDiscovery?.stop();
     memoryMaintenance?.stop();
@@ -1144,10 +1217,12 @@ async function main() {
         managementServer.close((error) => error ? rejectClose(error) : resolveClose());
       });
     }
+    await desktopLifecycle?.close();
   }
 }
 
 main().catch((error) => {
+  serviceHealth?.failStartup();
   console.error("机器人启动失败：", safeErrorDetails(error));
   process.exitCode = 1;
 });

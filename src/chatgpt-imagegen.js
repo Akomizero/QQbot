@@ -4,18 +4,18 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { get } from "node:http";
 import sharp from "sharp";
 import { buildImageGenerationPrompt } from "./image-prompt.js";
+import { imagegenProxyUrl, browserRuntimeHealth, ensureBrowserRuntime, inspectChatGptPage, stopBrowserRuntimeBootstrap } from "./imagegen-runtime.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const folder = join(root, ".local", "chatgpt-images");
 const projectHelper = join(root, "tools", "chatgpt-web-imagegen", "chatgpt_web_imagegen.py");
 const helper = existsSync(projectHelper) ? projectHelper : join(homedir(), ".codex", "skills", "chatgpt-web-imagegen", "scripts", "chatgpt_web_imagegen.py");
-const proxy = "http://127.0.0.1:3456";
+const proxy = imagegenProxyUrl;
 let tail = Promise.resolve(), pending = 0, running = false;
 let stopping = false, cancelActive = null;
-export function stopChatGptImageGeneration() { stopping = true; cancelActive?.(); }
+export function stopChatGptImageGeneration() { stopping = true; cancelActive?.(); stopBrowserRuntimeBootstrap(); }
 
 export class ChatGptImageError extends Error {
   constructor(code, message) { super(message); this.name = "ChatGptImageError"; this.code = code; }
@@ -26,26 +26,19 @@ export function parseImageGenerationIntent(text, aliases = []) {
   for (const alias of [...aliases].sort((a, b) => b.length - a.length)) {
     if (alias && value.startsWith(alias)) { value = value.slice(alias.length).replace(/^[\s,，:：、]+/u, ""); break; }
   }
-  const match = value.match(/^(?:\/(?:生图|画图|draw)(?:\s+|$)|(?:(?:请|麻烦)?(?:你)?(?:帮我|给我)?\s*)(?:画(?:一张|一幅|个|张|幅)|生成(?:一张|一幅|张|幅)|画图|生图|绘图|生成图片|生成肖像)(?:图片|图画|肖像|图)?\s*[:：]?\s*)([\s\S]*)$/iu);
-  if (!match) return null;
+  const match = value.match(/^(?:\/(?:生图|画图|draw)(?:\s+|$)|(?:(?:请|麻烦)?(?:你)?(?:帮我|给我)?\s*)(?:(?:用|使用)\s*ChatGPT\s*)?(?:画(?:一张|一幅|一只|一个|只|个|张|幅)|生成(?:一张|一幅|张|幅)|画图|生图|绘图|生成图片|生成肖像)(?:图片|图画|肖像|图)?\s*[:：]?\s*)([\s\S]*)$/iu);
+  if (!match) {
+    const natural = value.match(/^(?:请|麻烦)?(?:你)?(?:帮我|给我)?\s*(?:生成|画)([\s\S]{1,200}(?:的样子|的图|肖像|画像|插画|表情包|头像|图片))[。！!]?$/u);
+    return natural ? { prompt: natural[1].trim() } : null;
+  }
   return { prompt: match[1].trim() };
 }
 
-function health() {
-  return new Promise(resolveHealth => {
-    const request = get(`${proxy}/health`, response => {
-      let body = "";
-      response.setEncoding("utf8");
-      response.on("data", chunk => { body += chunk; if (body.length > 16000) request.destroy(); });
-      response.on("end", () => { try { const data = JSON.parse(body); resolveHealth({ connected: data.connected === true, browser: data.browser?.label ?? null }); } catch { resolveHealth({ connected: false }); } });
-    });
-    request.setTimeout(3000, () => request.destroy());
-    request.on("error", () => resolveHealth({ connected: false }));
-  });
-}
+const health = browserRuntimeHealth;
 
 export async function readChatGptImageStatus() {
   const connection = await health();
+  const page = connection.connected ? await inspectChatGptPage() : { pageReady: false, pageState: connection.state };
   const counts = { generated: 0, delivered: 0, failed: 0, uncertain: 0 };
   try { for (const name of readdirSync(folder)) {
     if (!/^[a-f0-9]{32}\.json$/u.test(name)) continue;
@@ -54,7 +47,7 @@ export async function readChatGptImageStatus() {
       else if (["running", "sending"].includes(job.state)) counts.uncertain++;
     } catch {}
   } } catch {}
-  return { installed: existsSync(helper), ...connection, pending, running, ...counts };
+  return { installed: existsSync(helper), ...connection, ...page, pending, running, ...counts };
 }
 
 function runHelper(prompt, output, allowed, referenceFiles) {
@@ -108,7 +101,7 @@ export async function generateChatGptImage({ prompt, sourceKey, allowed = () => 
   pending++;
   const work = tail.catch(() => {}).then(async () => {
     if (stopping || !allowed()) throw new ChatGptImageError("CANCELLED", "这次画图请求已取消。");
-    if (!(await health()).connected) throw new ChatGptImageError("DISCONNECTED", "Edge 网页生图连接未就绪，请管理员打开 Edge 并确认连接授权。");
+    if (!(await ensureBrowserRuntime()).connected) throw new ChatGptImageError("DISCONNECTED", "已尝试恢复网页连接，但 Edge 生图连接仍未就绪；请打开原浏览器并确认授权。");
     running = true;
     writeFileSync(jobFile, JSON.stringify({ id, state: "running", at: Date.now() }), { mode: 0o600 });
     if (referenceDataUrls.length > 2) throw new ChatGptImageError("REFERENCES", "一次最多使用两张参考图。");

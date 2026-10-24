@@ -23,6 +23,7 @@ function statusOf(state) {
     lastAddedCount: state.lastAddedCount ?? 0, lastMemberAddedCount: state.lastMemberAddedCount ?? 0, outcome: state.outcome ?? "waiting", attemptsToday: state.count ?? 0,
     lastKnowledgeAddedCount: state.lastKnowledgeAddedCount ?? Math.max(0, (state.lastAddedCount ?? 0) - (state.lastMemberAddedCount ?? 0)),
     lastKnowledgeSavedAt: state.lastKnowledgeSavedAt ?? null, lastProposedKnowledgeCount: state.lastProposedKnowledgeCount ?? 0,
+    manualTask: state.manualTask ?? null,
     lastGrowthFeedbackCount: state.lastGrowthFeedbackCount ?? 0,
     lastGrowthOutcome: state.lastGrowthOutcome ?? "waiting",
     memberAttemptsToday: state.memberCount ?? state.memberAttemptsToday ?? 0, day: state.day ?? "" };
@@ -148,7 +149,7 @@ export function getKnowledgeLearningStatus() {
   return { groups: [...ids].map(groupId => { const state = buffers.get(groupId), previous = state ? statusOf(state) : savedStatus[groupId];
     const knowledgeCount = previous.lastKnowledgeAddedCount ?? Math.max(0, (previous.lastAddedCount ?? 0) - (previous.lastMemberAddedCount ?? 0));
     const outcome = previous.outcome === "saved" && !knowledgeCount && previous.lastMemberAddedCount > 0 ? "members-only" : previous.outcome;
-    return { groupId, ...previous, lastKnowledgeAddedCount: knowledgeCount,
+    return { groupId, ...previous, manualTask: !state && ["queued","running"].includes(previous.manualTask?.state) ? {...previous.manualTask,state:"interrupted"} : previous.manualTask ?? null, lastKnowledgeAddedCount: knowledgeCount,
     outcome: !state && ["learning", "waiting", "waiting-context", "model-error"].includes(outcome) ? "buffer-cleared" : outcome,
     attemptsToday: previous.day === today ? previous.attemptsToday : 0, memberAttemptsToday: previous.day === today ? previous.memberAttemptsToday ?? 0 : 0,
     bufferedMessages: state?.messages.length ?? 0, bufferedMemberMessages: state?.messages.filter(message => message.memberEligible).length ?? 0,
@@ -168,7 +169,9 @@ function schedule(groupId, delay = 60_000) {
 async function evaluate(groupId, forced = false) {
   const state = buffers.get(groupId);
   if (!state) return;
+  forced ||= state.manualTask?.state === "queued";
   let acquired = false;
+  let deferred = false;
   let knowledgeAttempt = false, memberAttempt = false;
   let growthAttempt = false;
   let batch = [];
@@ -188,13 +191,14 @@ async function evaluate(groupId, forced = false) {
     const hasMembers = membersOn && state.messages.some(message => message.memberEligible);
     const hasGrowth = growthOn && state.messages.some(message => message.growthEligible && message.growthGeneration === growthStamp.generation);
     if (!knowledgeOn && !hasMembers && !hasGrowth) { state.outcome = "waiting-context"; return; }
-    if (active || now - state.lastAt < intervalMs) { schedule(groupId, Math.max(30_000, intervalMs - (now - state.lastAt))); return; }
+    if (active || now - state.lastAt < intervalMs) { deferred = true; schedule(groupId, Math.max(30_000, intervalMs - (now - state.lastAt))); return; }
     const apiKey = getLlmApiKey();
     if (!apiKey) { state.outcome = "missing-key"; return; }
     active = true;
     acquired = true;
     state.lastAt = now;
     state.outcome = "learning";
+    if(["queued","running"].includes(state.manualTask?.state))state.manualTask={...state.manualTask,state:"running"};
     knowledgeAttempt = knowledgeOn;
     memberAttempt = hasMembers;
     growthAttempt = hasGrowth;
@@ -238,6 +242,9 @@ async function evaluate(groupId, forced = false) {
     if (buffers.get(groupId) === state && batch.length) state.messages = [...batch, ...state.messages].slice(-40);
   } finally {
     if (acquired) active = false;
+    if(state.manualTask && ["queued","running"].includes(state.manualTask.state) && !deferred){
+      state.manualTask={...state.manualTask,state:acquired&&!['model-error','missing-key'].includes(state.outcome)?'succeeded':'failed',finishedAt:Date.now(),outcome:state.outcome,knowledge:acquired&&state.outcome!=='model-error'?state.lastKnowledgeAddedCount??0:0,members:acquired&&state.outcome!=='model-error'?state.lastMemberAddedCount??0:0,growth:acquired&&state.outcome!=='model-error'?state.lastGrowthFeedbackCount??0:0};
+    }
     persistStatus(groupId, state);
     if (state.messages.length) schedule(groupId, 60_000);
   }
@@ -283,6 +290,21 @@ export function observeKnowledgeMessage({ groupId, userId, text, settings, messa
   }
   persistStatus(groupId, state);
   schedule(groupId, teachingCue.test(text) ? 5000 : 60_000);
+}
+
+// Both management-page shortcuts join this same per-group operation.
+export function requestDialogueLearning(groupId){
+  const state=buffers.get(groupId);
+  if(state?.outcome==='learning'&&!['queued','running'].includes(state.manualTask?.state))state.manualTask={id:createHash('sha256').update(groupId+':'+Date.now()).digest('hex').slice(0,16),state:'running',requestedAt:Date.now()};
+  if(state?.outcome==='learning'||['queued','running'].includes(state?.manualTask?.state))return{message:'本群对话正在整理或等待处理，两页显示同一任务。',task:state.manualTask??{state:'running'}};
+  const settings=readLlmSettings(),growth=growthLearningStamp(groupId);
+  if(!readAccessControl().groupIds.includes(groupId))throw Object.assign(new Error('请选择已授权群。'),{statusCode:404});
+  if(!(settings.knowledgeEnabled&&settings.knowledgeLearningEnabled)&&!(settings.memberImpressionsEnabled!==false&&settings.memberImpressionsLearningEnabled!==false)&&!(growth.enabled&&growth.learningEnabled))throw Object.assign(new Error('本群学习均已关闭，请先开启需要的学习项目。'),{statusCode:409});
+  if(!state?.messages.some(m=>Date.now()-m.at<ttlMs))throw Object.assign(new Error('本群当前没有待整理对话；重启不恢复原始聊天缓冲。'),{statusCode:409});
+  state.manualTask={id:createHash('sha256').update(groupId+':'+Date.now()).digest('hex').slice(0,16),state:'queued',requestedAt:Date.now()};
+  persistStatus(groupId,state);
+  void flushKnowledgeLearning(groupId).catch(()=>{});
+  return{message:'已安排整理本群对话，将按各自学习开关更新知识、成员印象及相处反馈；没有足够证据时不会新增。',task:state.manualTask};
 }
 
 export async function flushKnowledgeLearning(selectedGroupId = undefined) {

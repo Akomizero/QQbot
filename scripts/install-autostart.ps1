@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $runner = Join-Path $PSScriptRoot 'run-bridge.ps1'
 $userName = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$taskName = 'QQGroupBot'
+$taskName = 'QQGroupBot-Shiyan'
 $action = New-ScheduledTaskAction -Execute 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' `
     -Argument ('-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $runner + '"') -WorkingDirectory $projectRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userName
@@ -19,7 +19,7 @@ try {
     $startup = [Environment]::GetFolderPath('Startup')
     if (-not $startup) { throw 'Could not locate the current-user Startup folder.' }
     New-Item -ItemType Directory -Path $startup -Force | Out-Null
-    $shortcutPath = Join-Path $startup 'QQGroupBot.lnk'
+    $shortcutPath = Join-Path $startup 'QQGroupBot-Shiyan.lnk'
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'

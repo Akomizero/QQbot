@@ -48,6 +48,15 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 36px); line-height: 1.15; letter-spa
 .notice strong { color: #276446; font-size: 12px; }
 .notice p span { color: #5f7668; }
 
+.runtime-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; margin: 13px 0 3px; }
+.overview-card { display: grid; gap: 5px; min-width: 0; padding: 15px 16px; border: 1px solid #e2e9e5; border-radius: 12px; background: rgba(255, 255, 255, .78); color: var(--ink); text-align: left; box-shadow: 0 8px 22px rgba(34, 58, 45, .035); transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+.overview-card:hover { transform: translateY(-1px); border-color: #badbc8; box-shadow: 0 10px 26px rgba(34, 58, 45, .07); }
+.overview-label { color: #7b8880; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+.overview-card strong { overflow: hidden; font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.overview-action { color: var(--green-dark); font-size: 10px; font-weight: 700; }
+.overview-ready { border-color: #d5eadd; background: linear-gradient(140deg, #fff, #f2faf5); }
+.overview-warning { border-color: #f0dfc4; background: linear-gradient(140deg, #fff, #fff9ef); }
+
 .workspace { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(330px, .8fr); gap: 19px; margin-top: 20px; align-items: start; }
 .list-panel, .editor-panel { min-width: 0; padding: 22px; border: 1px solid #e9eeeb; border-radius: 13px; background: var(--panel); box-shadow: var(--shadow); }
 .settings-panel { margin-top: 19px; padding: 22px; border: 1px solid #e9eeeb; border-radius: 13px; background: var(--panel); box-shadow: var(--shadow); }
@@ -84,6 +93,11 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 36px); line-height: 1.15; letter-spa
 .settings-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; padding-top: 14px; border-top: 1px solid #eff2f0; }
 .settings-action-buttons { display: flex; flex: none; flex-wrap: wrap; gap: 9px; }
 .settings-actions .button { flex: none; }
+.settings-save-copy { min-width: 0; }
+.settings-save-copy p { margin: 0; }
+.settings-save-copy .field-hint { margin-top: 4px; }
+.save-state { color: #3e6350; font-size: 11px; font-weight: 800; }
+.save-state-dirty { color: #a66a22; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; padding: 0 1px 16px; border-bottom: 1px solid #eff2f0; }
 .section-heading h2, .editor-heading h2 { margin: 0; font-size: 15px; letter-spacing: -.015em; }
 .section-heading p, .editor-heading p { margin: 5px 0 0; color: #8a958e; font-size: 11px; }
@@ -188,6 +202,7 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 23px
   .knowledge-grid { grid-template-columns: 1fr; }
   .member-layout { grid-template-columns: 1fr; }
   .management-nav button { padding-inline: 12px; }
+  .runtime-overview { grid-template-columns: 1fr; }
   .settings-group .settings-grid { grid-template-columns: 1fr; }
   #group-persona-form > .settings-grid, #persona-values > .settings-grid { grid-template-columns: 1fr; }
   .editor-panel { position: static; }
@@ -204,6 +219,7 @@ footer { display: flex; justify-content: space-between; gap: 12px; padding: 23px
   .local-badge { font-size: 10px; }
   .live-indicator { font-size: 9px; }
   .settings-panel { padding: 16px; }
+  .overview-card { padding: 13px 14px; }
   .settings-heading, .settings-actions { align-items: flex-start; flex-direction: column; }
   .key-statuses { justify-content: flex-start; }
   .settings-grid { grid-template-columns: 1fr; }

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { memoryIndex, recordMemoryRecall, recallScore, clearMemberRecall } from "./memory-index.js";
 import { forgetGrowthContributor } from "./personality-growth.js";
+import { replyContentHash, sharedMemberFact } from './memory-reply-access.js';
 
 const file = new URL("../data/member-impressions.json", import.meta.url);
 const validId = value => typeof value === "string" && /^\d{1,32}$/u.test(value);
@@ -82,7 +83,8 @@ function setMember(data, groupId, member) {
 }
 export function readMemberImpressions(groupId, { maintain = true } = {}) {
   checkIds(groupId); const data = load(); if (maintain && maintainGroup(data, groupId)) write(data); const group = groupFor(data, groupId);
-  return { groupId, revision: revision(group), members: Object.values(group.members).sort((a, b) => b.updatedAt - a.updatedAt) };
+  return { groupId, revision: revision(group), members: Object.values(group.members).sort((a, b) => b.updatedAt - a.updatedAt)
+    .map(member => ({ ...member, facts: member.facts.map(fact => ({ ...fact, replyAllowed: sharedMemberFact(fact) })) })) };
 }
 export function memberLearningStamp(groupId, userId) {
   checkIds(groupId, userId); const member = groupFor(load(), groupId).members[userId] ?? fresh(userId);
@@ -104,6 +106,7 @@ export function saveMemberImpression(groupId, userId, profile, expectedRevision)
     ids.add(item.id); const previous = old.facts.find(fact => fact.id === item.id);
     const restoring = previous?.archivedAt && item.enabled && item.reviewStatus === "approved";
     return { ...previous, id: item.id, kind: item.kind, topic: item.topic.trim(), content: item.content.trim(), tags: [...new Set(item.tags.map(tag => tag.trim()))],
+      replyAllowed: item.replyAllowed === true, replyContentHash: item.replyAllowed === true ? replyContentHash(item.content.trim()) : null,
       reviewStatus: item.reviewStatus, enabled: item.reviewStatus === "approved" && item.enabled, origin: previous?.origin ?? "manual", decision: item.reviewStatus === "candidate" ? null : item.reviewStatus,
       ...(restoring ? { archivedAt: null, archiveReason: null, mergedInto: null, stale: false, supersededAt: null, supersededBy: null, supersedesId: null } : {}),
       evidenceRefs: previous?.evidenceRefs ?? [], createdAt: previous?.createdAt ?? now, updatedAt: now };
@@ -189,7 +192,7 @@ export function mergeMemberImpressions(groupId, candidates) {
   }
   if (added || changed) write(data); return added;
 }
-export function memberImpressionContext(groupId, userId, query) {
+export function memberImpressionContext(groupId, userId, query, { replyOnly = false } = {}) {
   if (!validId(groupId) || !validId(userId)) return null;
   const data = load(); if (maintainGroup(data, groupId)) write(data); const profile = groupFor(data, groupId).members[userId];
   if (!profile?.enabled) return null;
@@ -197,6 +200,7 @@ export function memberImpressionContext(groupId, userId, query) {
   const q = key(query);
   const recalls = memoryIndex(groupId).recalls;
   const selected = profile.facts.filter(fact => !fact.archivedAt && fact.enabled && fact.reviewStatus === "approved")
+    .filter(fact => !replyOnly || sharedMemberFact(fact))
     .filter(fact => all || ["nickname", "interaction"].includes(fact.kind) || [fact.topic, ...fact.tags].some(tag => q.includes(key(tag))))
     .sort((a, b) => Number(q.includes(key(b.topic))) - Number(q.includes(key(a.topic)))
       || recallScore(recalls[`member:${userId}:${b.id}`]) - recallScore(recalls[`member:${userId}:${a.id}`]) || b.updatedAt - a.updatedAt).slice(0, 4);

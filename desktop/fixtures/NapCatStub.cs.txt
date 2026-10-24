@@ -1,0 +1,54 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+
+string work=Environment.GetEnvironmentVariable("NAPCAT_WORKDIR") ?? throw new Exception("Fixture work directory missing");
+if(!File.Exists(Path.Combine(work,"fixture.marker"))) throw new Exception("Fixture marker missing");
+if(Path.GetFileName(Environment.ProcessPath!).StartsWith("NapCatWinBoot",StringComparison.Ordinal)) {
+    using var qq=Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory,"QQ.exe")){UseShellExecute=false,CreateNoWindow=true})!;
+    await qq.WaitForExitAsync();return;
+}
+using var config=JsonDocument.Parse(File.ReadAllText(Path.Combine(work,"config","webui.json")));
+int port=config.RootElement.GetProperty("port").GetInt32();
+using var plan=JsonDocument.Parse(File.ReadAllText(Path.Combine(work,"fixture-plan.json")));
+int wsPort=plan.RootElement.GetProperty("wsPort").GetInt32();
+var listener=new TcpListener(IPAddress.Loopback,port);listener.Start();
+_ = Task.Run(async()=> {
+    ClientWebSocket? socket=null;
+    while(true) {
+        try {
+            using var state=JsonDocument.Parse(File.ReadAllText(Path.Combine(work,"phone-state.json")));
+            if(state.RootElement.GetProperty("isLogin").GetBoolean() && state.RootElement.GetProperty("connect").GetBoolean() && socket?.State!=WebSocketState.Open){
+                socket?.Dispose();socket=new ClientWebSocket();socket.Options.SetRequestHeader("Authorization","Bearer fixture-onebot-token");
+                await socket.ConnectAsync(new Uri($"ws://127.0.0.1:{wsPort}/onebot/v11/ws"),CancellationToken.None);
+            }
+        }catch{}
+        await Task.Delay(200);
+    }
+});
+while(true) {
+    var client=await listener.AcceptTcpClientAsync();
+    _=Task.Run(async()=> {
+        using(client)try {
+            var stream=client.GetStream();using var reader=new StreamReader(stream,Encoding.UTF8,false,4096,true);
+            string first=await reader.ReadLineAsync() ?? "";int length=0;
+            for(string? line=await reader.ReadLineAsync();!string.IsNullOrEmpty(line);line=await reader.ReadLineAsync())if(line.StartsWith("Content-Length:",StringComparison.OrdinalIgnoreCase))int.TryParse(line.Split(':')[1].Trim(),out length);
+            if(length>65536)return;
+            var body=new char[length];int offset=0;while(offset<length){int count=await reader.ReadAsync(body,offset,length-offset);if(count==0)break;offset+=count;}
+            object data;
+            if(first.Contains("/auth/login "))data=new {Credential="fixture-webui-session"};
+            else if(first.Contains("/RefreshQRcode ")){File.SetLastWriteTimeUtc(Path.Combine(work,"cache","qrcode.png"),DateTime.UtcNow);data=new {qrcodeurl="fixture-only"};}
+            else {
+                using var state=JsonDocument.Parse(File.ReadAllText(Path.Combine(work,"phone-state.json")));
+                bool logged=state.RootElement.GetProperty("isLogin").GetBoolean();
+                data=new {isLogin=logged,loginPhase=logged?"ready":"waiting_qrcode",qrLoginAccepted=false,coreReady=logged,loginError=""};
+            }
+            byte[] json=JsonSerializer.SerializeToUtf8Bytes(new {code=0,data});
+            byte[] header=Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "+json.Length+"\r\n\r\n");
+            await stream.WriteAsync(header);await stream.WriteAsync(json);await stream.FlushAsync();
+        }catch{}
+    });
+}

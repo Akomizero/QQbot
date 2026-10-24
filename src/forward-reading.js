@@ -13,6 +13,7 @@ export async function prepareForwardReading(record, { describe, withImages, allo
   const originals = record.nodes;
   record.batchPrepared = true;
   record.visualReadings = [];
+  record.characterDecisions=[];record.characterObservations=[];record.characterInspectionCompleted=true;
   record.failedImageNumbers = [];
   record.textBatches = [];
   const longText = JSON.stringify(originals).length > 18000;
@@ -51,6 +52,8 @@ export async function prepareForwardReading(record, { describe, withImages, allo
         const images = prepared.map((image, i) => ({ number: refs[i].forwardedNumber, dataUrl: image.dataUrl }));
         const relevant = originals.filter(node => refs.some(ref => node.content.includes(`转发图片${ref.forwardedNumber}，`))).map(node => ({ ...node, content: node.content.slice(0, 3000) })).slice(0, 4);
         const result = await describe({ images, nodes: relevant, userQuestion, allowed: running });
+        record.characterInspectionCompleted&&=result.characterInspectionCompleted===true;
+        record.characterDecisions.push(...(result.characterDecisions??[]));record.characterObservations.push(...(result.characterObservations??[]));
         record.visualReadings.push(...result.images.map(item => ({ number: item.number, summary: safe(item.summary) })));
       });
     } catch (error) {

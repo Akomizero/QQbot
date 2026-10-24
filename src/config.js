@@ -99,6 +99,10 @@ export function updateSerperApiKey(apiKey) {
   return updateEnvironmentKey("SERPER_API_KEY", apiKey);
 }
 
+export function updateTavilyApiKey(apiKey) {
+  return updateEnvironmentKey("TAVILY_API_KEY", apiKey);
+}
+
 function updateEnvironmentKey(name, apiKey) {
   const normalizedKey = apiKey === null ? null : validateLlmApiKey(apiKey);
   let source;

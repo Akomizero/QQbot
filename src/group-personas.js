@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { DEFAULT_LLM_SETTINGS, normalizeLlmSettings } from "./llm-settings-store.js";
 
 const path = fileURLToPath(new URL("../data/group-personas.json", import.meta.url));
-const fields = ["systemPrompt", "personality", "expressionStyle", "memory", "botAliases"];
+const fields = ["systemPrompt", "personality", "expressionStyle", "memory", "botAliases", "memoryReplyEnabled"];
 
 export function personaFields(settings) {
   return Object.fromEntries(fields.map((key) => [key, key === "botAliases" ? [...settings[key]] : settings[key]]));
@@ -15,7 +15,7 @@ function normalizeProfile(input) {
   if (!input || typeof input !== "object" || Array.isArray(input) || typeof input.groupId !== "string" || !/^\d{1,32}$/u.test(input.groupId)) throw new Error("群号无效。");
   if (typeof input.enabled !== "boolean") throw new Error("独立人设开关必须是布尔值。");
   if (typeof input.label !== "string" || input.label.trim().length > 60) throw new Error("群备注最多60字。");
-  if (fields.some((key) => !Object.hasOwn(input, key))) throw new Error("群人设缺少必填字段。");
+  if (fields.filter(key => key !== 'memoryReplyEnabled').some((key) => !Object.hasOwn(input, key))) throw new Error("群人设缺少必填字段。");
   const validated = normalizeLlmSettings({ ...DEFAULT_LLM_SETTINGS, ...Object.fromEntries(fields.map((key) => [key, input[key]])) });
   return { groupId: input.groupId, label: input.label.trim(), enabled: input.enabled, ...personaFields(validated),
     updatedAt: Number.isSafeInteger(input.updatedAt) && input.updatedAt >= 0 ? input.updatedAt : 0 };
@@ -49,7 +49,7 @@ export function ensureGroupPersonas(groupIds, defaults) {
     if (profiles.some((profile) => profile.groupId === groupId)) continue;
     if (profiles.length >= 256) throw new Error("最多保存256个群的人设。");
     profiles.push(normalizeProfile({ groupId, label: "", enabled: true, ...personaFields(defaults),
-      memory: missing ? defaults.memory : "", updatedAt: Date.now() }));
+      memory: missing ? defaults.memory : "", memoryReplyEnabled: false, updatedAt: Date.now() }));
     changed = true;
   }
   if (changed || missing) writeProfiles(profiles);
@@ -73,10 +73,16 @@ export function saveGroupPersona(groupId, input, revision, allowedGroups) {
   return withRevision(profile);
 }
 
+export function groupPersonaSettings(settings, profile) {
+  // Default/private memory is never inherited by a shared group.
+  return profile?.enabled ? { ...settings, ...personaFields(profile), memoryReplyUserIds: [] } : { ...settings, memory: "", memoryReplyEnabled: false, memoryReplyUserIds: [] };
+}
+
 export function settingsForGroup(settings, groupId) {
   if (typeof groupId !== "string" || !/^\d{1,32}$/u.test(groupId)) return settings;
   const profile = readProfiles().profiles.find((entry) => entry.groupId === groupId);
-  const effective = profile?.enabled ? { ...settings, ...personaFields(profile) } : settings;
+  // Default memory is private/default configuration, not a public group fallback.
+  const effective = groupPersonaSettings(settings, profile);
   return { ...effective, groupPersonaSince: profile?.updatedAt ?? 0,
     groupPersonaRevision: personaRevision({ groupId, ...personaFields(effective), profileUpdatedAt: profile?.updatedAt ?? 0 }) };
 }

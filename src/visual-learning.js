@@ -7,11 +7,11 @@ import { getLlmApiKey } from "./config.js";
 import { settingsForGroup } from "./group-personas.js";
 import { fetchModel } from "./model-transport.js";
 import { characterFingerprint } from "./character-vision.js";
-import { addVisualCandidate, isVisualCorrectionText, recordVisualVerification } from "./visual-memory-store.js";
+import { addVisualCandidate, isVisualCorrectionText, recordVisualVerification, readVisualMemories } from "./visual-memory-store.js";
 import { verifyVisualCorrection } from "./visual-verification.js";
 import { reviewStickerBytes } from "./sticker-review.js";
 const stateFile = new URL("../.local/visual-learning-state.json",import.meta.url);
-const stateCodes = new Set(["waiting","queued","screening","extracting","verifying","web-verified","candidate-saved","duplicate","no-correction","ambiguous-image","missing-image","image-unavailable","review-unavailable","content-rejected","extraction-unavailable","invalid-extraction","preview-unavailable","save-unavailable","verification-save-unavailable","cancelled","interrupted","queue-full","unavailable-or-rejected"]);
+const stateCodes = new Set(["waiting","queued","screening","extracting","verifying","web-verified","candidate-saved","provisional-saved","disputed","duplicate","no-correction","ambiguous-image","missing-image","image-unavailable","review-unavailable","content-rejected","extraction-unavailable","invalid-extraction","preview-unavailable","save-unavailable","verification-save-unavailable","cancelled","interrupted","queue-full","unavailable-or-rejected"]);
 function readStates() {
   try {
     const text=readFileSync(stateFile,"utf8");if(Buffer.byteLength(text)>64*1024)return [];
@@ -37,7 +37,7 @@ export function noteVisualLearningMissingImage(groupId) {
   const settings=readLlmSettings();
   if(settings.visualMemoryLearningEnabled&&settings.visionEnabled&&settings.characterRecognitionEnabled)setState(groupId,"missing-image");
 }
-export function queueVisualCorrection({ groupId, text, messageId, sourceMessageId, relatedStickerId = null, loadImages }) {
+export function queueVisualCorrection({ groupId, text, messageId, sourceMessageId, senderId, relatedStickerId = null, loadImages }) {
   const settings = readLlmSettings();
   if (!settings.visualMemoryLearningEnabled || !settings.visionEnabled || !settings.characterRecognitionEnabled || !isVisualCorrectionText(text)) return;
   if(waiting>=8){setState(groupId,"queue-full");return;}
@@ -86,17 +86,23 @@ export function queueVisualCorrection({ groupId, text, messageId, sourceMessageI
     const fingerprint = await characterFingerprint(bytes);
     if (!allowed()) {setState(groupId,"cancelled");return;}
     failureCode="save-unavailable";
+    const traceId = value => typeof value === "string" && /^-?\d{1,32}$/u.test(value) ? value : undefined;
+    const evidence = { hash: key, imageSourceHash: createHash("sha256").update(`${groupId}:${sourceMessageId ?? messageId}`).digest("hex"), at: Date.now(),
+      correctionMessageId: traceId(messageId), sourceMessageId: traceId(sourceMessageId ?? messageId), senderId: traceId(senderId) };
     const added = addVisualCandidate({ groupId, name, work, traits, fingerprint, preview: `data:image/jpeg;base64,${previewBytes.toString("base64")}`,
-      relatedStickerId, evidence: { hash: key, imageSourceHash: createHash("sha256").update(`${groupId}:${sourceMessageId ?? messageId}`).digest("hex"), at: Date.now() } });
-    setState(groupId,added?"verifying":"duplicate");
+      relatedStickerId, evidence });
+    const savedState = () => readVisualMemories(groupId).entries.find(entry => entry.id === added)?.status;
+    setState(groupId,added?(savedState()==="disputed"?"disputed":"provisional-saved"):"duplicate");
     if (added && allowed()) {
       failureCode="verification-save-unavailable";
       let report;
+      if (!readLlmSettings().searchEnabled) return;
+      setState(groupId,"verifying");
       try { report = await verifyVisualCorrection({ name, work, dataUrl, allowed }); }
       catch { report = { status: "verification-unavailable", sources: [] }; }
       if (!allowed()) {setState(groupId,"cancelled");return;}
       const adopted = recordVisualVerification(groupId, added, report);
-      setState(groupId,adopted?"web-verified":"candidate-saved");
+      setState(groupId,savedState()==="disputed"?"disputed":adopted?"web-verified":"provisional-saved");
     }
   }).catch(error => { setState(groupId,error?.rejected===true?"content-rejected":failureCode); }).finally(() => { waiting--; });
 }
