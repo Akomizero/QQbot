@@ -155,7 +155,7 @@ await test("unresolved tool responses respect tool rounds, final-answer retry bu
   for(const retryEnabled of [true,false]){
     const requests=[];
     responder=options=>{requests.push(JSON.parse(options.body));return Response.json({choices:[{finish_reason:"tool_calls",message:{content:null,tool_calls:[{id:"t"+requests.length,type:"function",function:{name:"missing",arguments:"{}"}}]}}]});};
-    await assert.rejects(reply({settings:{...base,modelRetryEnabled:retryEnabled}}),e=>e.code==="TOOLS_UNFINISHED");
+    await assert.rejects(reply({groupId:'111',settings:{...base,modelRetryEnabled:retryEnabled}}),e=>e.code==="TOOLS_UNFINISHED");
     const {toolRounds,attemptsPerStep}=llm.completionBudget;
     assert.equal(fetchCount,toolRounds+(retryEnabled?attemptsPerStep:1));
     assert(requests.slice(0,toolRounds).every(r=>r.tools?.length>0));
