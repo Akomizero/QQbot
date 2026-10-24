@@ -16,16 +16,22 @@ export async function resolveMessageContext({ event, groupId, selfId, lookup, se
   if (!source) {
     try {
       const result = await sendAction("get_msg", { message_id: id });
-      // Never pull a quoted private/other-group message into this group's context.
-      if (String(result?.group_id ?? "") === groupId && Number(result.time) * 1000 >= since) {
+      const returnedId = String(result?.message_id ?? "");
+      const returnedUserId = result?.user_id ?? result?.sender?.user_id;
+      const returnedAt = Number(result?.time) * 1000;
+      // A get_msg result is usable only when it identifies the requested message,
+      // has a real author, and belongs to this group after its memory boundary.
+      if (returnedId === id && /^\d{1,32}$/u.test(String(returnedUserId ?? ""))
+        && String(result?.group_id ?? "") === groupId && Number.isFinite(returnedAt) && returnedAt >= since) {
         const text = Array.isArray(result.message) ? result.message.filter(s => s.type === "text").map(s => s.data?.text ?? "").join("") : "";
-        source = { userId: String(result.user_id ?? result.sender?.user_id), isBot: String(result.user_id ?? result.sender?.user_id) === selfId,
+        source = { userId: String(returnedUserId), isBot: String(returnedUserId) === selfId,
           text, name: cleanName(result.sender?.card || result.sender?.nickname) };
       }
     } catch {}
   }
   const quote = String(source?.text ?? "");
-  context.reply = source ? { id, available: true, speakerId: source.isBot ? selfId : source.userId,
+  const speakerId = source?.isBot ? selfId : /^\d{1,32}$/u.test(String(source?.userId ?? "")) ? String(source.userId) : null;
+  context.reply = source && speakerId ? { id, available: true, speakerId,
     isBot: Boolean(source.isBot), name: cleanName(source.name), text: /(?:sk-[a-z\d]{12,}|tvly-|api.?key|密钥|密码|cookie|sessdata)/iu.test(quote) ? "[引用含敏感内容，未提供正文]" : quote.slice(0, 600), stickerId: source.stickerId ?? null }
     : { id, available: false };
   return context;
