@@ -1,4 +1,5 @@
 export function createReplyCoordinator({ intervalMs = 10_000, now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  const isSend=action=>['send_msg','send_group_msg','send_private_msg','send_group_forward_msg','send_private_forward_msg'].includes(action);
   const requests = new Map();
   const sends = new Map();
   function enqueue(map, key, task) {
@@ -21,7 +22,7 @@ export function createReplyCoordinator({ intervalMs = 10_000, now = Date.now, sl
     return job;
   }
   function sendBatch(action,parts,sendMessage,allowed=()=>true) {
-    if(action!=="send_msg")return sendMessage(action,parts[0]);
+    if(action!=="send_msg")return !isSend(action)||allowed()?sendMessage(action,parts[0]):Promise.resolve({cancelled:true});
     const params=parts[0],key=`${params.message_type}:${params.group_id??params.user_id}`;
     if(parts.some(part=>part.message_type!==params.message_type||String(part.group_id??part.user_id)!==String(params.group_id??params.user_id)))throw new Error("Mixed reply destinations");
     return enqueue(sends,key,async state=>{
@@ -49,7 +50,7 @@ export function createReplyCoordinator({ intervalMs = 10_000, now = Date.now, sl
   return {
     run: (key, task) => enqueue(requests, key, task),
     send: (action, params, sendMessage, allowed = () => true) => {
-      if (action !== "send_msg") return sendMessage(action, params);
+      if (action !== "send_msg") return !isSend(action)||allowed()?sendMessage(action, params):Promise.resolve({cancelled:true});
       return sendBatch(action,[params],sendMessage,allowed);
     },
     sendBatch,

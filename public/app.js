@@ -163,7 +163,8 @@ async function requestAdminApi(url, options = {}) {
 }
 
 async function requestCommands(options) { return requestAdminApi("/api/commands", options); }
-async function requestLlmSettings(options) { return requestAdminApi("/api/llm-settings", options); }
+let llmSettingsRevisionValue=null;
+async function requestLlmSettings(options) { const data=await requestAdminApi("/api/llm-settings", options);llmSettingsRevisionValue=data.revision??null;return data; }
 async function requestAccessControl(options) { return requestAdminApi("/api/access-control", options); }
 
 function showAuthScreen(mode, message = "") {
@@ -528,6 +529,7 @@ llmSettingsForm.addEventListener("submit", async (event) => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         settings,
+        revision: llmSettingsRevisionValue,
         ...(apiKey ? { apiKey } : {}),
         ...(serperKeyInput.value.trim() ? { serperApiKey: serperKeyInput.value.trim() } : {}),
         ...(tavilyKeyInput.value.trim() ? { tavilyApiKey: tavilyKeyInput.value.trim() } : {}),

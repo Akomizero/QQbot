@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
-import { protectOutbound, runtimePrivacyBoundary, outboundPrivacyScope } from "./privacy-boundary.js";
+import { protectOutbound, runtimePrivacyBoundary, outboundPrivacyScope, protectedSendActions } from "./privacy-boundary.js";
 
 // A get_image response may contain one GIF up to 20 MiB, before first-frame conversion.
 const maxPayloadBytes = 32 * 1024 * 1024;
@@ -99,12 +99,13 @@ export function createOneBotBridge({ port, path, accessToken, onMessage, onStatu
     }
   }
 
-  function sendAction(action, params) {
+  async function sendAction(action, params) {
     const client = activeClient;
     if (!client || client.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("OneBot WebSocket is not connected"));
     }
-    const checked = protectOutbound(action, params, privacyBoundary(outboundPrivacyScope(params)));
+    const checked = protectedSendActions.includes(action)?protectOutbound(action, params, privacyBoundary(outboundPrivacyScope(params,action))):{action,params,blocked:false};
+    if(checked.cancelled)return{cancelled:true,privacyBlocked:true};
     action = checked.action; params = checked.params;
 
     const echo = `codex-${++nextEcho}`;

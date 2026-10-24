@@ -81,11 +81,13 @@ try {
   output='合成检查完成。';await ask(null,V);assert(!lastPrompt().includes(defaultMemory));
   assert(privacy.protectOutbound('send_msg',{message_type:'private',user_id:V,message:defaultMemory}).blocked);checks.push('another private recipient cannot retrieve or send the owner memory');
   const p=currentProfile();personas.saveGroupPersona(G,{...p,memory:p.memory+'饲养员账号991119999，内部身份不得公开。'},p.revision,[G]);
+  assert.equal(currentProfile().memoryReplyEnabled,false,'Editing stored memory invalidates its previous grant');grantGroup(true);
   await ask();assert(!lastPrompt().includes('991119999'));assert(lastPrompt().includes(groupMemory));
   assert(privacy.protectOutbound('send_msg',{message_type:'group',group_id:G,message:'991119999'}).blocked);checks.push('group-use grant never publishes internal identity or account numbers');
   grantGroup(false);grantFact(false);config.writeLlmSettings({...config.readLlmSettings(),memoryReplyUserIds:[]});
-  await store.sendLlmResult(permitted,{message_type:'group',group_id:G},async(_a,p)=>{delivered=p.message;return{message_id:'synthetic'}});
-  assert.equal(delivered,privacy.privateReplyNotice);checks.push('revocation before sending blocks a previously generated permitted result');
+  delivered=null;
+  const cancelled=await store.sendLlmResult(permitted,{message_type:'group',group_id:G},async(_a,p)=>{delivered=p.message;return{message_id:'synthetic'}});
+  assert.equal(cancelled,false);assert.equal(delivered,null);checks.push('revocation before sending cancels a previously generated permitted result before transport');
   const forward=fold.buildLongReply({message_type:'group',group_id:G,message:groupMemory+'\n'+fact,auto_escape:true,foldLongReply:true},{selfId:'700000091',settings:{longReplyThreshold:100}});
   assert(forward);assert(privacy.protectOutbound(forward.action,forward.params).blocked);checks.push('revoked material is blocked across actual folded forward nodes');
   output=fact;const revoked=await ask();assert(!lastPrompt().includes(fact));assert(!lastPrompt().includes(groupMemory));assert.equal(revoked.status,'privacy-blocked');checks.push('revocation removes recall and blocks stale model repetition');

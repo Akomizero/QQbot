@@ -11,7 +11,8 @@
     "start": "node src/launcher.js",
     "dev": "node src/launcher.js --watch",
     "web": "node src/management-only.js",
-    "test:p0": "node test/p0-isolated.mjs"
+    "test:p0": "node test/p0-isolated.mjs && node test/memory-privacy-regression.mjs",
+    "test:memory-privacy": "node test/memory-privacy-regression.mjs"
   },
   "dependencies": {
     "ffmpeg-static": "^5.3.0",

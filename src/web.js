@@ -14,7 +14,7 @@ import {
 } from "./admin-auth.js";
 import { readAccessControl, writeAccessControl } from "./access-control-store.js";
 import { readCommands, writeCommands } from "./command-store.js";
-import { readLlmSettings, writeLlmSettings } from "./llm-settings-store.js";
+import { readLlmSettings, writeLlmSettings, llmSettingsRevision } from "./llm-settings-store.js";
 import { ensureGroupPersonas, saveGroupPersona, personaFields, settingsForGroup } from "./group-personas.js";
 import { searchKnowledge, knowledgeRevision, readScopedKnowledge, writeScopedKnowledge } from "./knowledge-base.js";
 import { addSticker, deleteSticker, listStickers, readSticker, updateSticker } from "./sticker-store.js";
@@ -621,6 +621,7 @@ export async function startManagementServer({
         try {
           sendJson(response, 200, {
             settings: readLlmSettings(),
+            revision: llmSettingsRevision(),
             apiKeyConfigured: Boolean(getLlmApiKey()),
             searchApiKeyConfigured: Boolean(getSearchApiKey()),
             serperApiKeyConfigured: Boolean(getSearchApiKey("serper")),
@@ -662,7 +663,10 @@ export async function startManagementServer({
           if (body.clearTavilyApiKey === true && body.tavilyApiKey) throw new Error("不能同时清除并填写 Tavily key。");
           const serperKey = body.serperApiKey === undefined || body.serperApiKey === "" ? undefined : validateLlmApiKey(body.serperApiKey);
           const tavilyKey = body.tavilyApiKey === undefined || body.tavilyApiKey === "" ? undefined : validateLlmApiKey(body.tavilyApiKey);
-          const settings = writeLlmSettings({ ...readLlmSettings(), ...body.settings });
+          const currentSettings=readLlmSettings();
+          const memoryChanged=['memory','memoryReplyEnabled','memoryReplyUserIds'].some(key=>Object.hasOwn(body.settings,key)&&JSON.stringify(body.settings[key])!==JSON.stringify(currentSettings[key]));
+          if(memoryChanged && typeof body.revision!=='string') throw Object.assign(new Error('记忆授权保存需要当前修订号，请重新读取设置。'),{statusCode:409});
+          const settings = writeLlmSettings({ ...currentSettings, ...body.settings },body.revision);
           if (body.clearSerperApiKey === true) updateSerperApiKey(null);
           else if (serperKey !== undefined) updateSerperApiKey(serperKey);
           if (body.clearTavilyApiKey === true) updateTavilyApiKey(null);
@@ -674,13 +678,14 @@ export async function startManagementServer({
             settings,
             apiKeyConfigured: Boolean(getLlmApiKey()),
             apiKeyUpdated: keyAction !== "none",
+            revision: llmSettingsRevision(),
             searchApiKeyConfigured: Boolean(getSearchApiKey()),
             serperApiKeyConfigured: Boolean(getSearchApiKey("serper")),
             message: "模型设置已保存，立即生效。",
           });
         } catch (error) {
           sendJson(response, error.statusCode ?? 400, {
-            error: error.message === "模型 API key 格式不正确。" || error.message === "模型 API key 只能包含不带空格的可见 ASCII 字符。"
+            error: error.statusCode===409 || error.message === "模型 API key 格式不正确。" || error.message === "模型 API key 只能包含不带空格的可见 ASCII 字符。"
               ? error.message
               : "保存模型设置失败，请检查接口地址和字段格式。",
           });

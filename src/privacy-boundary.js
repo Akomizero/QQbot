@@ -1,4 +1,6 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { createHash } from 'node:crypto';
+import { memoryTransportAllowed } from './memory-use-guard.js';
 import { recordPrivacyHit, privacyCounterSources } from './privacy-hit-counters.js';
 import { configuredMemoryAllowed, configuredReplyMemory, memoryClauses, shareableMemoryClause, sharedMemberFact } from './memory-reply-access.js';
 
@@ -17,7 +19,7 @@ export function buildPrivacyBoundary({ memories = [], memberFacts = [], confiden
   for (const value of [...memories, ...memberFacts, ...confidential]) {
     for (const clause of String(value).split(/[。！？\n]/u)) {
       const text = canonical(clause);
-      if (text.length < 12) continue;
+      if (text.length < 12) { if(text.length>=2) literals.add(String(clause)); continue; }
       // Do not keep actual private values in diagnostics or test fixtures.
       // Fixed-width fragments also catch partial quotations of a stored fact.
       for (let i = 0; i + 12 <= text.length; i++) fragments.add(text.slice(i, i + 12));
@@ -34,7 +36,7 @@ export function buildPrivacyBoundary({ memories = [], memberFacts = [], confiden
         if(typeof value!=='string')continue;
         if(kind==='credential'){if(value.length>=8)for(const encoded of [canonical(value),Buffer.from(value).toString('base64').toLowerCase(),Buffer.from(value).toString('hex')])add(literalSources,canonical(encoded),kind);continue;}
         if(!kind.startsWith('member_'))for(const id of value.match(/(?<!\d)\d{5,32}(?!\d)/gu)??[])for(const encoded of[id,Buffer.from(id).toString('base64').toLowerCase(),Buffer.from(id).toString('hex')])add(literalSources,canonical(encoded),kind);
-        for(const clause of value.split(/[。！？\n]/u)){const text=canonical(clause);for(let i=0;i+12<=text.length;i++)add(fragmentSources,text.slice(i,i+12),kind);}
+        for(const clause of value.split(/[。！？\n]/u)){const text=canonical(clause);if(text.length>=2&&text.length<12)for(const encoded of[canonical(clause),Buffer.from(clause).toString('base64'),Buffer.from(clause).toString('hex')])add(literalSources,canonical(encoded),kind);for(let i=0;i+12<=text.length;i++)add(fragmentSources,text.slice(i,i+12),kind);}
       }
     }
     diagnosticSources.set(boundary,{literalSources,fragmentSources});
@@ -71,31 +73,41 @@ export function observedPrivacyViolation(stage,value,boundary){
   noteDecision(stage,hit,sources,boundary);return hit;
 }
 
-const files = ["data/llm-settings.json", "data/group-personas.json", "data/member-impressions.json", "data/knowledge-base.json", ".env"];
+const files = ["data/llm-settings.json", "data/group-personas.json", "data/member-impressions.json", "data/knowledge-base.json", ".env", "data/access-control.json"];
 let cachedStamp = ""; const cachedBoundaries = new Map();
 export function runtimePrivacyBoundary(scope = {}) {
   try {
-    const stamp = files.map(name => { try { const s = statSync(new URL("../" + name, import.meta.url)); return `${s.mtimeMs}:${s.size}`; } catch (e) { if (e.code === "ENOENT") return "missing"; throw e; } }).join("|");
+    // Content, not mtime/size, is authoritative. Parse the same read used for the fingerprint.
+    const sources=new Map(files.map(name=>{try{const source=readFileSync(new URL('../'+name,import.meta.url),'utf8');if(Buffer.byteLength(source)>10*1024*1024)throw Error('Privacy source too large');return[name,source];}catch(e){if(e.code==='ENOENT')return[name,null];throw e;}}));
+    const stamp=createHash('sha256').update(JSON.stringify([...sources,...['QQBOT_LLM_API_KEY','SERPER_API_KEY','TAVILY_API_KEY','ONEBOT_ACCESS_TOKEN'].map(name=>[name,process.env[name]])])).digest('hex');
     const scopeKey = JSON.stringify([scope.scope, scope.groupId, scope.userId]);
     if (cachedStamp !== stamp) { cachedBoundaries.clear(); cachedStamp = stamp; }
     if (cachedBoundaries.has(scopeKey)) return cachedBoundaries.get(scopeKey);
-    const json = name => { try { return JSON.parse(readFileSync(new URL("../" + name, import.meta.url), "utf8")); } catch (e) { if (e.code === "ENOENT") return {}; throw e; } };
-    const defaults = json(files[0]).settings ?? {}, profiles = json(files[1]).profiles ?? [];
+    const json = name => sources.get(name)===null?{}:JSON.parse(sources.get(name));
+    const settingsData=json(files[0]),personaData=json(files[1]),memberData=json(files[2]),knowledgeData=json(files[3]);
+    if(sources.get(files[0])!==null&&(settingsData.version!==1||!settingsData.settings||typeof settingsData.settings!=='object'||Array.isArray(settingsData.settings))
+      ||sources.get(files[1])!==null&&(personaData.version!==1||!Array.isArray(personaData.profiles))
+      ||sources.get(files[2])!==null&&(memberData.version!==1||!memberData.groups||typeof memberData.groups!=='object'||Array.isArray(memberData.groups))
+      ||sources.get(files[3])!==null&&(knowledgeData.version!==1||!Array.isArray(knowledgeData.entries)))throw Error('Invalid privacy source');
+    const accessData=json(files[5]),access=accessData.accessControl;
+    if(sources.get(files[5])!==null&&(accessData.version!==1||!Array.isArray(access?.groupIds)||!Array.isArray(access?.userIds)))throw Error('Invalid access source');
+    const scopeAllowed=scope.scope==='group'?access?.groupIds.includes(scope.groupId):scope.scope==='private'&&access?.userIds.includes(scope.userId);
+    const defaults = settingsData.settings ?? {}, profiles = personaData.profiles ?? [];
     const memories = [defaults, ...profiles].map(profile => {
       const sameScope = profile === defaults ? scope.scope === 'private' : scope.scope === 'group' && profile.groupId === scope.groupId;
-      return memoryClauses(profile.memory).filter(clause => !(sameScope && configuredMemoryAllowed(profile, scope) && shareableMemoryClause(clause))).join('');
+      return memoryClauses(profile.memory).filter(clause => !(scopeAllowed && sameScope && configuredMemoryAllowed(profile, scope) && shareableMemoryClause(clause))).join('');
     });
     const confidential = [defaults, ...profiles].flatMap(profile => [profile.systemPrompt, profile.personality, profile.expressionStyle]
       .flatMap(value => String(value ?? "").split(/[。！？\n]/u).filter(clause => personal.test(clause))));
     const personaConfidential=[...confidential],knowledgeConfidential=[],memberCategories={member_candidate:[],member_approved:[],member_other:[]};
     const memberFacts = [];
-    for (const [groupId, group] of Object.entries(json(files[2]).groups ?? {})) for (const member of Object.values(group.members ?? {})) {
+    for (const [groupId, group] of Object.entries(memberData.groups ?? {})) for (const member of Object.values(group.members ?? {})) {
       for (const fact of member.facts ?? []) if (typeof fact.content === 'string'
-        && !(scope.scope === 'group' && scope.groupId === groupId && member.enabled !== false && sharedMemberFact(fact))) {memberFacts.push(fact.content);memberCategories[fact.reviewStatus==='candidate'?'member_candidate':fact.reviewStatus==='approved'?'member_approved':'member_other'].push(fact.content);}
+        && !(scopeAllowed && scope.scope === 'group' && scope.groupId === groupId && member.enabled !== false && sharedMemberFact(fact))) {memberFacts.push(fact.content);memberCategories[fact.reviewStatus==='candidate'?'member_candidate':fact.reviewStatus==='approved'?'member_approved':'member_other'].push(fact.content);}
     }
-    for (const entry of json(files[3]).entries ?? []) if (personal.test(entry.content ?? "")) {confidential.push(entry.content);knowledgeConfidential.push(entry.content);}
+    for (const entry of knowledgeData.entries ?? []) if (personal.test(entry.content ?? "")) {confidential.push(entry.content);knowledgeConfidential.push(entry.content);}
     const secrets = ["QQBOT_LLM_API_KEY", "SERPER_API_KEY", "TAVILY_API_KEY", "ONEBOT_ACCESS_TOKEN"].map(name => process.env[name]);
-    try { for (const line of readFileSync(new URL("../.env", import.meta.url), "utf8").split(/\r?\n/u)) {
+    try { for (const line of (sources.get('.env')??'').split(/\r?\n/u)) {
       const match = line.match(/^\s*(?:QQBOT_LLM_API_KEY|SERPER_API_KEY|TAVILY_API_KEY|ONEBOT_ACCESS_TOKEN)\s*=\s*(.*?)\s*$/u);
       if (match) secrets.push(match[1].replace(/^["']|["']$/gu, ""));
     } } catch (e) { if (e.code !== "ENOENT") throw e; }
@@ -157,12 +169,22 @@ function outgoingText(value) {
   return "";
 }
 
-export function outboundPrivacyScope(params) {
-  return params.message_type === 'group' || params.group_id !== undefined ? { scope: 'group', groupId: String(params.group_id) }
-    : { scope: 'private', userId: String(params.user_id) };
+export const protectedSendActions=Object.freeze(['send_msg','send_group_msg','send_private_msg','send_group_forward_msg','send_private_forward_msg']);
+export function outboundPrivacyScope(params,action='send_msg') {
+  const invalid=()=>{throw Object.assign(new Error('无法确认唯一有效的发送目的地。'),{code:'INVALID_SEND_DESTINATION'});};
+  if(!params||typeof params!=='object'||!protectedSendActions.includes(action))return invalid();
+  const hasGroup=params.group_id!==undefined,hasUser=params.user_id!==undefined;
+  const scope=action==='send_msg'?(params.message_type??(hasGroup?'group':hasUser?'private':null)):action.includes('group')?'group':'private';
+  if(!['group','private'].includes(scope)||hasGroup===hasUser||(scope==='group')!==hasGroup||params.message_type!==undefined&&params.message_type!==scope)return invalid();
+  const id=scope==='group'?params.group_id:params.user_id;
+  if(!(typeof id==='string'||typeof id==='number'&&Number.isSafeInteger(id))||!(/^[1-9]\d{0,31}$/u.test(String(id))))return invalid();
+  return scope==='group'?{scope,groupId:String(id)}:{scope,userId:String(id)};
 }
-export function protectOutbound(action, params, boundary = runtimePrivacyBoundary(outboundPrivacyScope(params))) {
-  if (!["send_msg", "send_group_msg", "send_private_msg", "send_group_forward_msg", "send_private_forward_msg"].includes(action)) return { action, params, blocked: false };
+export function protectOutbound(action, params, boundary) {
+  if (!protectedSendActions.includes(action)) return { action, params, blocked: false };
+  const scope=outboundPrivacyScope(params,action);
+  if(!memoryTransportAllowed(scope))return{action,params,blocked:true,cancelled:true};
+  boundary??=runtimePrivacyBoundary(scope);
   if (!observedPrivacyViolation('onebot_send',outgoingText(params.message ?? params.messages), boundary)) return { action, params, blocked: false };
   const isGroup = action.includes("group") || params.message_type === "group" || params.group_id !== undefined;
   return { action: "send_msg", params: { message_type: isGroup ? "group" : "private", ...(isGroup ? { group_id: params.group_id } : { user_id: params.user_id }), message: privateReplyNotice, auto_escape: true }, blocked: true };
