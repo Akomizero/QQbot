@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot date: 2026-10-24 (Asia/Shanghai)
+Snapshot date: 2026-10-25 (Asia/Shanghai)
 
 This repository records the current source state. It is an unfinished project archive, not a release claim or a guarantee that the bot starts successfully on another machine. This archive pass did not start the bot or run the test suite.
 
@@ -48,6 +48,6 @@ The following local documents were omitted because they contain private persona 
 - **PR #1:** merged into `main` on 2026-10-25. Merge commit: `2ba91906477f9809492ee8ecfc36f4266f04d082`. PR head before merge: `1c2ec909b329cf0f1391b6fca50c25466e90215b`.
 - **Included work:** P0-03 memory authorization and privacy boundaries; P0-04 bounded model retries, cancellation and diagnostics; P0-05 quoted-message identity and scope checks; P0-06.1 authorized fixture for the protected character identity path.
 - **Local validation:** `npm.cmd run test:p0` passed 184/184 and `node test/character-reliability.mjs` passed 19/19 on the verified source/test content. The merged tree has the same executable source and test content; the final report-only commit contains sanitized documentation. `git diff --check` and the sanitized-document checks passed.
-- **CI and review:** the repository has no configured branch protection or rulesets; the merged commit had no GitHub Actions check runs, and the PR had no independent GitHub review. These are not reported as CI or human-review passes.
-- **Deployment:** not performed. The local runtime candidate is a separate, non-Git copy with private configuration/runtime data and 22 of 72 source files differing from this published snapshot. The process owning its OneBot listener could not be identified in this session. Reconcile the source versions and define a backup/rollback path before deployment.
+- **CI and review:** a local review of the cumulative P0 diff found no blocking issue. The repository has no configured branch protection or rulesets; the merged commit had no GitHub Actions check runs, and the PR had no independent GitHub review. These are not reported as CI or human-review passes.
+- **Deployment (2026-10-25):** deployed the source and test files from merged tree `e44d5939d2b98ff1b5784dcfe7f2a30d208888fd` to the confirmed local bot runtime. A 349-file, 47.13 MB pre-deploy backup was checksum-verified. `.env`, live data, `node_modules`, private documents, and desktop build outputs were preserved. After restart, fresh local health reported core ready and OneBot connected; the management and OneBot listeners belonged to the bot process. This verifies process startup and OneBot connection only, not message delivery or real model/QQ end-to-end behavior. The only observed live-data change was the memory-index maintenance timestamp; its entry counts stayed unchanged.
 - **Still unverified:** real QQ and external-model end-to-end behavior, FFmpeg binary installation, backup restoration, and the role-reference management workflow. No live QQ test message or real model call was sent in this closeout.
