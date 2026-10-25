@@ -41,3 +41,13 @@ The following local documents were omitted because they contain private persona 
 - Confirmed the existing remote repository and default branch through the connected GitHub account.
 - Checked candidate files for credentials, known QQ identifiers, and local absolute user paths; the publication copy is scrubbed.
 - No application tests or live service checks were run for this archival task.
+
+
+## P0 delivery closeout
+
+- **PR #1:** merged into `main` on 2026-10-25. Merge commit: `2ba91906477f9809492ee8ecfc36f4266f04d082`. PR head before merge: `1c2ec909b329cf0f1391b6fca50c25466e90215b`.
+- **Included work:** P0-03 memory authorization and privacy boundaries; P0-04 bounded model retries, cancellation and diagnostics; P0-05 quoted-message identity and scope checks; P0-06.1 authorized fixture for the protected character identity path.
+- **Local validation:** `npm.cmd run test:p0` passed 184/184 and `node test/character-reliability.mjs` passed 19/19 on the verified source/test content. The merged tree has the same executable source and test content; the final report-only commit contains sanitized documentation. `git diff --check` and the sanitized-document checks passed.
+- **CI and review:** the repository has no configured branch protection or rulesets; the merged commit had no GitHub Actions check runs, and the PR had no independent GitHub review. These are not reported as CI or human-review passes.
+- **Deployment:** not performed. The local runtime candidate is a separate, non-Git copy with private configuration/runtime data and 22 of 72 source files differing from this published snapshot. The process owning its OneBot listener could not be identified in this session. Reconcile the source versions and define a backup/rollback path before deployment.
+- **Still unverified:** real QQ and external-model end-to-end behavior, FFmpeg binary installation, backup restoration, and the role-reference management workflow. No live QQ test message or real model call was sent in this closeout.
