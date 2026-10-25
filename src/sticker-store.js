@@ -8,6 +8,7 @@ import { reviewStickerBytes, isTrustedStickerReview, STICKER_REVIEW_VERSION } fr
 import { renderSummaryImages } from "./announcement-card.js";
 import { stickerPolicyAllows, recordStickerSent } from "./sticker-preferences.js";
 import { protectLlmResult, runtimePrivacyBoundary, outboundPrivacyScope } from "./privacy-boundary.js";
+import { withReplyMemory, memoryTransportAllowed } from './memory-use-guard.js';
 import { stickerGroupLimit, stickerContentKey } from "./sticker-policy.js";
 
 const root = fileURLToPath(new URL("../.local/stickers/", import.meta.url));
@@ -230,6 +231,7 @@ export function stickerChoices(conversationId) {
 }
 
 export async function sendLlmResult(result, destination, sendMessage, { stickersEnabled = true, onSent = () => {}, services = {} } = {}) {
+  return withReplyMemory(result,outboundPrivacyScope(destination),async()=>{
   result = protectLlmResult(result, runtimePrivacyBoundary(outboundPrivacyScope(destination)));
   const choices = services.choices ?? stickerChoices, read = services.read ?? readSticker, policy = services.policy ?? stickerPolicyAllows,
     record = services.record ?? recordStickerSent, list = services.list ?? listStickers;
@@ -261,8 +263,9 @@ export async function sendLlmResult(result, destination, sendMessage, { stickers
     sendingStickers.add(conversationId);
   }
   try {
+    if (!memoryTransportAllowed(outboundPrivacyScope(destination))) return false;
     const sent = await sendMessage("send_msg", { ...destination, message: sticker || summaryImages.length ? message : result.reply, auto_escape: true },
-      () => { if (!sticker) return true; const entries = list(), latest = entries.find(entry => entry.id === sticker.id && entry.enabled && entry.reviewStatus === "approved");
+      () => { if (!memoryTransportAllowed(outboundPrivacyScope(destination))) return false; if (!sticker) return true; const entries = list(), latest = entries.find(entry => entry.id === sticker.id && entry.enabled && entry.reviewStatus === "approved");
         return Boolean(latest && policy(latest, destination.message_type === "group" ? String(destination.group_id) : conversationId,
           { includeRecent: true, equivalentIds: entries.filter(other => stickerContentKey(other) === stickerContentKey(latest)).map(other => other.id) })); });
     if (sent?.cancelled) { if (sticker) sentAt.delete(conversationId); return false; }
@@ -272,4 +275,5 @@ export async function sendLlmResult(result, destination, sendMessage, { stickers
   catch (error) { if (sticker) sentAt.delete(conversationId); throw error; }
   finally { if (sticker) sendingStickers.delete(conversationId); }
   return true;
+  });
 }

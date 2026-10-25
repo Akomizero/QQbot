@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { memoryIndex, recordMemoryRecall, recallScore } from "./memory-index.js";
 
 const storePath = fileURLToPath(new URL("../data/knowledge-base.json", import.meta.url));
@@ -60,7 +60,14 @@ export function readKnowledgeEntries() {
 
 export function writeKnowledgeEntries(entries) {
   const normalized = normalizeKnowledgeEntries(entries);
-  const source = `${JSON.stringify({ version: 1, entries: normalized })}\n`;
+  let previous={entries:[],scopeRevisions:{}};
+  try{previous=JSON.parse(readFileSync(storePath,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+  const scopeRevisions={},scopeKey=entry=>entry.groupId??'private';
+  for(const scope of new Set([...(previous.entries??[]),...normalized].map(scopeKey))){
+    scopeRevisions[scope]=previous.scopeRevisions?.[scope]??randomUUID();
+    if(JSON.stringify((previous.entries??[]).filter(e=>scopeKey(e)===scope))!==JSON.stringify(normalized.filter(e=>scopeKey(e)===scope)))scopeRevisions[scope]=randomUUID();
+  }
+  const source = `${JSON.stringify({ version: 1, scopeRevisions, entries: normalized })}\n`;
   mkdirSync(dirname(storePath), { recursive: true });
   const tempPath = resolve(dirname(storePath), `knowledge-base.json.${process.pid}.tmp`);
   writeFileSync(tempPath, source, { encoding: "utf8", mode: 0o600 });

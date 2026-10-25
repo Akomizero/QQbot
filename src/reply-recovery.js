@@ -4,6 +4,7 @@ import { readLlmSettings } from "./llm-settings-store.js";
 import { settingsForGroup, personaRevision, personaFields } from "./group-personas.js";
 import { memberLearningStamp } from "./member-impressions.js";
 import { recoveryId, readRecoveryDelivery, sendRecoveredReply } from "./recovery-delivery.js";
+import { withReplyMemory } from './memory-use-guard.js';
 const folder = new URL("../.local/reply-recovery/", import.meta.url);
 const delays = [60_000, 180_000, 600_000];
 const active = new Set(["pending", "running"]);
@@ -83,8 +84,10 @@ export function startReplyRecovery({ sendAction, connected, run, pace }) {
         const result = await run(job, allowed);
         if (!allowed()) { job.state = "cancelled"; save(job); return; }
         if (!result || result.status !== "ok" || !result.reply?.trim()) { const error = new Error("Recovery result unavailable"); error.recoveryRetryable = result?.recoveryRetryable === true; throw error; }
-        const sent = await sendRecoveredReply({ scope: job.scope, peerId: job.peerId, sourceMessageId: job.sourceMessageId, text: result.reply, selfId: job.selfId,
-          sendAction: (action, params, guard = allowed) => pace(action, params, sendAction, guard, job.selfId), allowed });
+        const destination=job.scope==='group'?{scope:'group',groupId:job.peerId}:{scope:'private',userId:job.peerId};
+        const sent = await withReplyMemory(result,destination,()=>sendRecoveredReply({ scope: job.scope, peerId: job.peerId, sourceMessageId: job.sourceMessageId, text: result.reply, selfId: job.selfId,
+          sendAction: (action, params, guard = allowed) => pace(action, params, sendAction, guard, job.selfId), allowed }));
+        if(sent===false){job.state='cancelled';save(job);return;}
         job.state = sent?.cancelled ? "cancelled" : sent?.duplicate && !sent.message_id ? "uncertain" : "delivered";
         job.deliveredAt = Date.now(); save(job);
       } catch (error) {

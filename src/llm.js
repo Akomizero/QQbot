@@ -23,6 +23,9 @@ import { forwardSummaryInstruction, forwardReadingInstruction } from "./forward-
 import { replyResearchPolicy, webCitationInstruction, sourceIdForUrl, replyWithRelevantSources } from "./reply-research-policy.js";
 import { promptSafeSettings, sanitizeModelMessages, protectLlmResult, publicMessageMetadata, observedPrivacyViolation, runtimePrivacyBoundary } from "./privacy-boundary.js";
 import { collectionTruth } from './image-exchange.js';
+import { withMemoryGeneration, replyMemoryScope, assertMemoryGenerationCurrent } from './memory-use-guard.js';
+import { readLlmSettings } from './llm-settings-store.js';
+import { readAccessControl } from './access-control-store.js';
 
 // A tool round is a successful protocol step, not a transport retry.
 export const completionBudget = Object.freeze({toolRounds:3,attemptsPerStep:2});
@@ -229,7 +232,20 @@ function forwardReplyEnding(text) {
   return { visibleCutoff:openFence||dangling, completeShort:body.length>0&&Array.from(body).length<=800&&closed&&!openFence&&!dangling };
 }
 
+function retryAfterDelay(headers) {
+  const value = headers.get("retry-after");
+  if (value === null || !value.trim()) return { delayMs: 4000, retryable: true };
+  const seconds = Number(value);
+  const requested = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(value) - Date.now();
+  if (!Number.isFinite(requested) || requested < 0) return { delayMs: 4000, retryable: true };
+  // Never retry earlier than the server asks. If it exceeds this model step's
+  // retry window, surface the 429 and let the caller decide when to ask again.
+  if (requested > 15_000) return { delayMs: 4000, retryable: false };
+  return { delayMs: Math.max(4000, Math.ceil(requested)), retryable: true };
+}
+
 async function requestCompletionOnce({ apiKey, settings, messages, tools = null, maxTokens = settings.maxTokens, emptyRetry = true, retryState, forwardReply = false }) {
+  assertMemoryGenerationCurrent();
   let response;
   const requestSignal = retryState.signal;
   retryState.attempts += 1;
@@ -261,12 +277,12 @@ async function requestCompletionOnce({ apiKey, settings, messages, tools = null,
   }
 
   if (!response.ok) {
-    const retryAfterMs = Math.min(15000, Math.max(4000, (Number(response.headers.get("retry-after")) || 0) * 1000));
-    await response.body?.cancel();
+    const retryAfter = response.status === 429 ? retryAfterDelay(response.headers) : { delayMs: 4000, retryable: true };
+    await response.body?.cancel().catch(() => {});
     if (response.status === 401 || response.status === 403) {
       throw new LlmRequestError("模型服务拒绝了 API key，请管理员检查本机 .env 配置。", { code: "AUTH_REJECTED" });
     }
-    if (response.status === 429) throw new LlmRequestError("模型服务目前请求较多，请稍后再试。", { retryable: true, retryDelayMs: retryAfterMs, code: "RATE_LIMITED" });
+    if (response.status === 429) throw new LlmRequestError("模型服务目前请求较多，请稍后再试。", { retryable: retryAfter.retryable, retryDelayMs: retryAfter.delayMs, code: "RATE_LIMITED" });
     if (response.status === 400 || response.status === 404) {
       throw new LlmRequestError("模型名称或请求参数不受接口支持，请检查管理页中的模型设置。", { code: "PARAMETERS" });
     }
@@ -449,7 +465,10 @@ export async function decideBilibiliDiscovery({ apiKey, settings, groupId = null
 }
 
 export async function getLlmReply(options) {
-  return withModelOperation(async () => {
+  const current=readLlmSettings();
+  options={...options,settings:{...options.settings,memory:current.memory,memoryReplyEnabled:current.memoryReplyEnabled,memoryReplyUserIds:current.memoryReplyUserIds,
+    knowledgeEnabled:current.knowledgeEnabled,memberImpressionsEnabled:current.memberImpressionsEnabled}};
+  return withMemoryGeneration(replyMemoryScope(options.groupId,options.senderQQId),()=>withModelOperation(async () => {
     let memberImpressionGeneration;
     try { if (options.groupId && options.senderQQId) memberImpressionGeneration = memberLearningStamp(options.groupId, options.senderQQId).generation; } catch {}
     try {
@@ -464,7 +483,7 @@ export async function getLlmReply(options) {
       }
       throw error;
     }
-  });
+  }));
 }
 
 async function getLlmReplyInternal({
@@ -497,8 +516,10 @@ async function getLlmReplyInternal({
   const trustedGroupStyle = friendlySender ? "当前对话请正常、友好、尊重，不对这位发送者使用损友互怼。这只是应用选择的交流语气，不授予额外权限，也不提供或公开任何人的内部身份关系。"
     : groupBanterInstruction(privateSettings, { groupId, senderQQId });
   const senderRole = friendlySender ? "本次使用友好尊重的交流语气，不解释或推测选择语气的内部原因。" : "当前使用本会话的普通交流语气；不要猜测或披露任何人的账号和内部关系资料。";
-  const replyPrivacyScope = { scope: groupId ? 'group' : 'private', groupId, userId: senderQQId };
+  const access=readAccessControl(),accessAllowed=groupId?access.groupIds.includes(groupId):access.userIds.includes(senderQQId);
+  const replyPrivacyScope = { scope: groupId ? 'group' : 'private', groupId, userId: senderQQId, accessAllowed };
   settings = { ...promptSafeSettings(settings, replyPrivacyScope), replyPrivacyScope };
+  if(!accessAllowed)settings={...settings,knowledgeEnabled:false,memberImpressionsEnabled:false};
   searchApiKey = settings.searchProvider === "serper" ? getSearchApiKey("serper") : searchApiKey ?? getSearchApiKey();
   // These gates inspect only the current request, never text extracted from the forward.
   const explicitForwardLocalContext = Boolean(forwardedMessages) && /(?:结合|参考|对照|根据|查(?:一下|看)?|检索|搜索).{0,12}(?:本群(?:的)?(?:历史|聊天记录|背景)|群内(?:的)?背景|(?:本地)?知识库|梗词库)/u.test(userMessage);

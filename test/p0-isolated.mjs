@@ -155,7 +155,7 @@ await test("unresolved tool responses respect tool rounds, final-answer retry bu
   for(const retryEnabled of [true,false]){
     const requests=[];
     responder=options=>{requests.push(JSON.parse(options.body));return Response.json({choices:[{finish_reason:"tool_calls",message:{content:null,tool_calls:[{id:"t"+requests.length,type:"function",function:{name:"missing",arguments:"{}"}}]}}]});};
-    await assert.rejects(reply({settings:{...base,modelRetryEnabled:retryEnabled}}),e=>e.code==="TOOLS_UNFINISHED");
+    await assert.rejects(reply({groupId:'111',settings:{...base,modelRetryEnabled:retryEnabled}}),e=>e.code==="TOOLS_UNFINISHED");
     const {toolRounds,attemptsPerStep}=llm.completionBudget;
     assert.equal(fetchCount,toolRounds+(retryEnabled?attemptsPerStep:1));
     assert(requests.slice(0,toolRounds).every(r=>r.tools?.length>0));
@@ -260,7 +260,7 @@ await test("queued image references recheck expiry and changed context cutoff", 
   assert.equal(recentImages.canUseRecentGroupImages(reference, { groupId: "111", now: clock + 181000 }), false);
 });
 let messagesSent = [], sequence = 1000;
-const fakeOneBot = async (action, params) => { if (action === "get_group_msg_history") return { messages: [] }; if (action === "get_msg") return { group_id: "111", time: Math.floor(clock / 1000), user_id: "555", message: [{ type: "text", data: { text: "群友原话" } }] }; if (action === "send_msg") { messagesSent.push(params); return { message_id: String(-++sequence) }; } throw new Error("Unexpected fake action: " + action); };
+const fakeOneBot = async (action, params) => { if (action === "get_group_msg_history") return { messages: [] }; if (action === "get_msg") return { message_id: String(params.message_id), group_id: "111", time: Math.floor(clock / 1000), user_id: "555", message: [{ type: "text", data: { text: "群友原话" } }] }; if (action === "send_msg") { messagesSent.push(params); return { message_id: String(-++sequence) }; } throw new Error("Unexpected fake action: " + action); };
 function inbound(message, group = "111") { clock += 11000; return { post_type: "message", message_type: "group", group_id: group, self_id: "999", user_id: "444", message_id: String(++sequence), sender: { nickname: "测试成员" }, message }; }
 await test("real handler does not interrupt an @other message", async () => { messagesSent = []; fetchCount = 0; responder = () => payload(); await main.handleMessage(inbound([{ type: "at", data: { qq: "555" } }, { type: "text", data: { text: "你觉得肥鱼怎么样？" } }]), { sendMessage: fakeOneBot }, {}); assert.equal(messagesSent.length, 0); assert.equal(fetchCount, 0); });
 await test("real handler injects structured quote context into model", async () => { messagesSent = []; responder = options => { const content = JSON.parse(options.body).messages.map(x => typeof x.content === "string" ? x.content : "").join("\n"); assert.match(content, /群友原话/u); assert.match(content, /speakerId/u); return payload("是另一位群友说的。"); }; await main.handleMessage(inbound([{ type: "at", data: { qq: "999" } }, { type: "reply", data: { id: "-555" } }, { type: "text", data: { text: "这是谁说的？" } }]), { sendMessage: fakeOneBot }, {}); assert.equal(messagesSent.length, 1); });
@@ -278,21 +278,21 @@ await test("real handler attaches a separately sent image to the later mentioned
   assert.equal(imageReads, 0); assert.equal(fetchCount, 0);
   responder = options => { const messages = JSON.parse(options.body).messages; assert.ok(messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === "image_url"))); assert.match(JSON.stringify(messages), /这次请bot看的图片/u); return payload("这张表情是在调皮地接话。"); };
   await main.handleMessage(inbound([{ type: "at", data: { qq: "999" } }, { type: "text", data: { text: "如何评价" } }]), { sendMessage: imageOneBot }, {});
-  assert.equal(imageReads, 1); assert.equal(messagesSent.length, 1); assert.match(JSON.stringify(messagesSent[0]), /调皮地接话/u);
+  assert.equal(imageReads, 1,"image download count"); assert.equal(messagesSent.length, 1,"reply transport count"); assert.match(JSON.stringify(messagesSent[0]), /调皮地接话/u);
 });
 await test("same member image follow-up without @ still carries the image", async () => {
   messagesSent = []; let imageReads = 0;
   const imageOneBot = (action, params) => action === "get_image" ? (imageReads++, Promise.resolve({ base64: syntheticImage })) : fakeOneBot(action, params);
   responder = options => { assert.ok(JSON.parse(options.body).messages.some(message => Array.isArray(message.content) && message.content.some(part => part.type === "image_url"))); return payload("是在这个表情里装可爱呀。"); };
   await main.handleMessage(inbound([{ type: "text", data: { text: "这个图片" } }]), { sendMessage: imageOneBot }, {});
-  assert.equal(imageReads, 1); assert.equal(messagesSent.length, 1);
+  assert.equal(imageReads, 1,"image download count"); assert.equal(messagesSent.length, 1,"reply transport count");
 });
 await test("image-only reply to bot during an active turn is understood as addressed to bot", async () => {
   messagesSent = []; let imageReads = 0;
   const imageOneBot = (action, params) => action === "get_image" ? (imageReads++, Promise.resolve({ base64: syntheticImage })) : fakeOneBot(action, params);
   responder = () => payload("这张也挺会接梗。");
   await main.handleMessage(inbound([imageSegment]), { sendMessage: imageOneBot }, {});
-  assert.equal(imageReads, 1); assert.equal(messagesSent.length, 1);
+  assert.equal(imageReads, 1,"image download count"); assert.equal(messagesSent.length, 1,"reply transport count");
 });
 await test("disabled vision never reads an inherited image", async () => {
   config.writeLlmSettings({ ...base, visionEnabled: false }); messagesSent = []; let imageReads = 0;
@@ -336,7 +336,7 @@ await test("member revision conflicts do not overwrite newer data", async () => 
 await test("deleting a fact blocks relearning its topic", async () => { editProfile("111", "555", profile => { profile.facts = []; }); assert.equal(members.memberImpressionContext("111", "555", "测试音乐"), null); assert.equal(members.mergeMemberImpressions("111", [makeMember("111", "555", "测试音乐")]), 0); });
 await test("pausing member learning preserves approved recall", async () => { editProfile("222", "444", profile => { profile.learningEnabled = false; }); assert.match(members.memberImpressionContext("222", "444", "测试动画"), /测试动画/u); assert.equal(members.mergeMemberImpressions("222", [makeMember("222", "444", "测试新主题")]), 0); });
 await test("disabling a member prevents recall", async () => { editProfile("222", "444", profile => { profile.enabled = false; }); assert.equal(members.memberImpressionContext("222", "444", "测试动画"), null); });
-await test("LLM receives only explicitly reply-authorized current-group current-sender impressions", async () => { let prompt; responder = options => { prompt = JSON.stringify(JSON.parse(options.body).messages); return payload(); }; await reply({ groupId: "111", senderQQId: "444", userMessage: "测试游戏", settings: { ...base, memberImpressionsEnabled: true } }); assert.ok(!prompt.includes('喜欢测试游戏'));editProfile('111','444',profile=>{for(const fact of profile.facts)fact.replyAllowed=true;});await reply({ groupId: "111", senderQQId: "444", userMessage: "测试游戏", settings: { ...base, memberImpressionsEnabled: true } });assert.match(prompt, /喜欢测试游戏/u);await reply({ groupId: "111", senderQQId: "555", userMessage: "测试游戏", settings: { ...base, memberImpressionsEnabled: true } }); assert.ok(!prompt.includes("喜欢测试游戏")); });
+await test("LLM receives only explicitly reply-authorized current-group current-sender impressions", async () => { config.writeLlmSettings({...config.readLlmSettings(),memberImpressionsEnabled:true}); let prompt; responder = options => { prompt = JSON.stringify(JSON.parse(options.body).messages); return payload(); }; await reply({ groupId: "111", senderQQId: "444", userMessage: "测试游戏", settings: { ...base, memberImpressionsEnabled: true } }); assert.ok(!prompt.includes('喜欢测试游戏'));editProfile('111','444',profile=>{for(const fact of profile.facts)fact.replyAllowed=true;});await reply({ groupId: "111", senderQQId: "444", userMessage: "测试游戏", settings: { ...base, memberImpressionsEnabled: true } });assert.match(prompt, /喜欢测试游戏/u);await reply({ groupId: "111", senderQQId: "555", userMessage: "测试游戏", settings: { ...base, memberImpressionsEnabled: true } }); assert.ok(!prompt.includes("喜欢测试游戏"));config.writeLlmSettings({...config.readLlmSettings(),memberImpressionsEnabled:false}); });
 await test("forget prevents an in flight extraction from restoring facts", async () => { const candidate = makeMember("111", "444", "旧任务主题"); members.forgetMemberImpression("111", "444"); assert.equal(members.memberImpressionContext("111", "444", "测试游戏"), null); assert.equal(members.mergeMemberImpressions("111", [candidate]), 0); assert.equal(members.memberLearningStamp("111", "444").learningEnabled, false); members.resumeMemberImpression("111", "444"); assert.equal(members.mergeMemberImpressions("111", [candidate]), 0); assert.equal(members.readMemberImpressions("111").members.find(x => x.userId === "444").facts.length, 0); clock += 1000; });
 await test("forgetting one group preserves the other group", async () => { const profile = members.readMemberImpressions("222").members.find(x => x.userId === "444"); assert.equal(profile.facts.length, 1); });
 await test("member forget cannot be triggered by a negated command", async () => { assert.equal(members.memberMemoryCommand("不要忘记我"), null); assert.equal(members.memberMemoryCommand("肥鱼，忘记我"), "forget"); assert.equal(members.memberMemoryCommand("继续记住我"), "resume"); });

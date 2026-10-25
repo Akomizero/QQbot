@@ -1,0 +1,434 @@
+{
+  "baselineCommit": "98561f5886e96dc2141aa1a1d366a253f2b2fda8",
+  "testedCommit": "8eb67b6af5eb946f3e259fd79b698813efe9419b",
+  "branch": "fix/p0-03-memory-privacy-regression",
+  "sourceTree": "1eec0be6e32303409e7afdeaa1fc8c5ddf4e9346",
+  "testTree": "49b072e0ca9e622422a159623f0188796947021b",
+  "worktreeCleanAtStart": true,
+  "worktreeCleanAtEnd": true,
+  "baseline": {
+    "memory": {
+      "passed": 13,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "privacy": {
+      "passed": 14,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "p0": {
+      "passed": 108,
+      "failed": 0,
+      "exitCode": 0
+    },
+    "addedSuiteAgainstBaseline": {
+      "passed": 11,
+      "failed": 34,
+      "exitCode": 1
+    }
+  },
+  "results": [
+    {
+      "command": "node test/memory-privacy-impact.mjs",
+      "exitCode": 0,
+      "elapsedMs": 2123,
+      "log": ".local/p0-03/final-memory.log",
+      "logSha256": "36c75841cbf23ba4985b5046deb3d79fbf070574ed869ec5a9e1e91a94efe134",
+      "summaries": [
+        {
+          "passed": 13,
+          "total": 13
+        }
+      ]
+    },
+    {
+      "command": "node --test test/privacy-boundary.mjs",
+      "exitCode": 0,
+      "elapsedMs": 456,
+      "log": ".local/p0-03/final-privacy.log",
+      "logSha256": "ec49c37ee30c7b471b907cc1784dc8cf6f63a9da18dcd8e707ae6582be2b9d2e",
+      "passed": 14,
+      "failed": 0,
+      "summaries": []
+    },
+    {
+      "command": "node test/privacy-hit-counters.mjs",
+      "exitCode": 0,
+      "elapsedMs": 1960,
+      "log": ".local/p0-03/final-counters.log",
+      "logSha256": "541bff45d10f9d3441cd67c9d31603fa9cafdb9ed56e71607aa7c4761061a1c8",
+      "summaries": [
+        {
+          "passed": 11
+        }
+      ]
+    },
+    {
+      "command": "node test/memory-privacy-regression.mjs",
+      "exitCode": 0,
+      "elapsedMs": 4886,
+      "log": ".local/p0-03/final-new.log",
+      "logSha256": "ac6feec182eb6a576cfb581f84eab4199a0e1cbb90cfa62ffc7d6fe7f0ff6452",
+      "summaries": [
+        {
+          "passed": 45,
+          "failed": 0
+        }
+      ]
+    },
+    {
+      "command": "node --check public/app.js",
+      "exitCode": 0,
+      "elapsedMs": 107,
+      "log": ".local/p0-03/final-syntax-0.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/group-personas.js",
+      "exitCode": 0,
+      "elapsedMs": 108,
+      "log": ".local/p0-03/final-syntax-1.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/knowledge-base.js",
+      "exitCode": 0,
+      "elapsedMs": 101,
+      "log": ".local/p0-03/final-syntax-2.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/llm-settings-store.js",
+      "exitCode": 0,
+      "elapsedMs": 94,
+      "log": ".local/p0-03/final-syntax-3.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/llm.js",
+      "exitCode": 0,
+      "elapsedMs": 91,
+      "log": ".local/p0-03/final-syntax-4.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/main.js",
+      "exitCode": 0,
+      "elapsedMs": 95,
+      "log": ".local/p0-03/final-syntax-5.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/member-impressions.js",
+      "exitCode": 0,
+      "elapsedMs": 98,
+      "log": ".local/p0-03/final-syntax-6.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/memory-reply-access.js",
+      "exitCode": 0,
+      "elapsedMs": 110,
+      "log": ".local/p0-03/final-syntax-7.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/memory-use-guard.js",
+      "exitCode": 0,
+      "elapsedMs": 92,
+      "log": ".local/p0-03/final-syntax-8.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/onebot.js",
+      "exitCode": 0,
+      "elapsedMs": 92,
+      "log": ".local/p0-03/final-syntax-9.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/privacy-boundary.js",
+      "exitCode": 0,
+      "elapsedMs": 93,
+      "log": ".local/p0-03/final-syntax-10.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/reply-queue.js",
+      "exitCode": 0,
+      "elapsedMs": 116,
+      "log": ".local/p0-03/final-syntax-11.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/reply-recovery.js",
+      "exitCode": 0,
+      "elapsedMs": 109,
+      "log": ".local/p0-03/final-syntax-12.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/sticker-store.js",
+      "exitCode": 0,
+      "elapsedMs": 99,
+      "log": ".local/p0-03/final-syntax-13.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check src/web.js",
+      "exitCode": 0,
+      "elapsedMs": 91,
+      "log": ".local/p0-03/final-syntax-14.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check test/memory-privacy-impact.mjs",
+      "exitCode": 0,
+      "elapsedMs": 91,
+      "log": ".local/p0-03/final-syntax-15.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check test/memory-privacy-regression.mjs",
+      "exitCode": 0,
+      "elapsedMs": 93,
+      "log": ".local/p0-03/final-syntax-16.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check test/p0-isolated.mjs",
+      "exitCode": 0,
+      "elapsedMs": 97,
+      "log": ".local/p0-03/final-syntax-17.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "node --check test/privacy-hit-counters.mjs",
+      "exitCode": 0,
+      "elapsedMs": 94,
+      "log": ".local/p0-03/final-syntax-18.log",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "command": "npm run test:p0",
+      "exitCode": 0,
+      "elapsedMs": 10707,
+      "log": ".local/p0-03/final-p0.log",
+      "logSha256": "228446eef1f320690f53f3dd891f2d5d09c39b1d82befc5bb4b1da8ef66b0051",
+      "summaries": [
+        {
+          "passed": 108,
+          "failed": 0
+        },
+        {
+          "passed": 45,
+          "failed": 0
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "A scopes and repeated session switches are enforced in actual model requests",
+      "passed": true
+    },
+    {
+      "name": "B restricted private clauses remain excluded despite ordinary memory grants",
+      "passed": true
+    },
+    {
+      "name": "B member body edits through production save invalidate inherited consent",
+      "passed": true
+    },
+    {
+      "name": "B disabled member facts cannot be recalled",
+      "passed": true
+    },
+    {
+      "name": "B rejected member facts cannot be recalled",
+      "passed": true
+    },
+    {
+      "name": "B archived member facts cannot be recalled",
+      "passed": true
+    },
+    {
+      "name": "B superseded member facts cannot be recalled",
+      "passed": true
+    },
+    {
+      "name": "B deleted member facts cannot be recalled",
+      "passed": true
+    },
+    {
+      "name": "B candidate rejected archived and disabled knowledge do not enter requests",
+      "passed": true
+    },
+    {
+      "name": "C stale caller settings cannot inject deleted private memory",
+      "passed": true
+    },
+    {
+      "name": "B new groups never copy private default memory into their stored profiles",
+      "passed": true
+    },
+    {
+      "name": "B configured memory edits clear inherited grants before explicit reauthorization",
+      "passed": true
+    },
+    {
+      "name": "B stale feature settings cannot resurrect disabled recall",
+      "passed": true
+    },
+    {
+      "name": "C revocation between tool rounds prevents the next model request",
+      "passed": true
+    },
+    {
+      "name": "C deletion while model is generating invalidates stale reply",
+      "passed": true
+    },
+    {
+      "name": "C queue delay revalidates deletion at actual OneBot send",
+      "passed": true
+    },
+    {
+      "name": "C private queued reply is cancelled after its source memory is deleted",
+      "passed": true
+    },
+    {
+      "name": "C queue delay revalidates destination whitelist revocation",
+      "passed": true
+    },
+    {
+      "name": "A removed group cannot supply memory to a new model request or direct send",
+      "passed": true
+    },
+    {
+      "name": "A removed private account cannot use a retained memory grant",
+      "passed": true
+    },
+    {
+      "name": "C folded queue delay revalidates memory body replacement",
+      "passed": true
+    },
+    {
+      "name": "C forward rejection cannot fall back after consent is revoked",
+      "passed": true
+    },
+    {
+      "name": "C revoke then re-enable does not revive a queued reply",
+      "passed": true
+    },
+    {
+      "name": "C private grant revoke and re-enable invalidates a generated result",
+      "passed": true
+    },
+    {
+      "name": "C knowledge disable and re-enable invalidates prior source version",
+      "passed": true
+    },
+    {
+      "name": "C split batch revocation after first part cancels unsent parts",
+      "passed": true
+    },
+    {
+      "name": "C asynchronous illustrated rendering revalidates before image transport",
+      "passed": true
+    },
+    {
+      "name": "C generated reply cannot change destination after source deletion",
+      "passed": true
+    },
+    {
+      "name": "C privacy cache sees equal-length writes with unchanged mtime",
+      "passed": true
+    },
+    {
+      "name": "C stale settings write cannot overwrite newer revocation",
+      "passed": true
+    },
+    {
+      "name": "C stale group and member revisions reject concurrent writes",
+      "passed": true
+    },
+    {
+      "name": "C stale knowledge revision cannot overwrite a newer disabled record",
+      "passed": true
+    },
+    {
+      "name": "C authenticated HTTP settings writes reject stale consent without changing new state",
+      "passed": true
+    },
+    {
+      "name": "C recovered reply keeps provenance through production recovery sender",
+      "passed": true
+    },
+    {
+      "name": "D valid send actions use their actual group or private destination",
+      "passed": true
+    },
+    {
+      "name": "D ambiguous destination private-action-group-field fails before transport",
+      "passed": true
+    },
+    {
+      "name": "D ambiguous destination private-action-group-type fails before transport",
+      "passed": true
+    },
+    {
+      "name": "D ambiguous destination missing-target fails before transport",
+      "passed": true
+    },
+    {
+      "name": "D ambiguous destination double-target fails before transport",
+      "passed": true
+    },
+    {
+      "name": "D ambiguous destination invalid-target fails before transport",
+      "passed": true
+    },
+    {
+      "name": "D forward coordinator applies denied authorization guard",
+      "passed": true
+    },
+    {
+      "name": "D unapproved short fact stays protected at final transmission",
+      "passed": true
+    },
+    {
+      "name": "D malformed authorization stores fail closed before transport",
+      "passed": true
+    },
+    {
+      "name": "C proactive main handler preserves authorization through delayed transport",
+      "passed": true
+    },
+    {
+      "name": "A invalid group identifiers cannot inherit private memory",
+      "passed": true
+    }
+  ],
+  "externalModelCalls": 0,
+  "realQqSends": 0
+}

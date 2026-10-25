@@ -49,7 +49,7 @@ export function ensureGroupPersonas(groupIds, defaults) {
     if (profiles.some((profile) => profile.groupId === groupId)) continue;
     if (profiles.length >= 256) throw new Error("最多保存256个群的人设。");
     profiles.push(normalizeProfile({ groupId, label: "", enabled: true, ...personaFields(defaults),
-      memory: missing ? defaults.memory : "", memoryReplyEnabled: false, updatedAt: Date.now() }));
+      memory: "", memoryReplyEnabled: false, updatedAt: Date.now() }));
     changed = true;
   }
   if (changed || missing) writeProfiles(profiles);
@@ -67,7 +67,10 @@ export function saveGroupPersona(groupId, input, revision, allowedGroups) {
   const index = profiles.findIndex((profile) => profile.groupId === groupId);
   if (index < 0) throw new Error("请刷新群人设列表后再保存。");
   if (revision !== personaRevision(profiles[index])) { const error = new Error("这个群的人设刚被其他页面更新，请撤销修改读取最新配置后再编辑。"); error.statusCode = 409; throw error; }
-  const profile = normalizeProfile({ ...input, groupId, updatedAt: Date.now() });
+  const previous=profiles[index];
+  const profile = normalizeProfile({ ...input, groupId,
+    memoryReplyEnabled:input.memory === previous.memory && input.memoryReplyEnabled===true,
+    updatedAt: Math.max(Date.now(),previous.updatedAt+1) });
   profiles[index] = profile;
   writeProfiles(profiles);
   return withRevision(profile);

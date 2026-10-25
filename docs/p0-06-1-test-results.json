@@ -1,0 +1,88 @@
+{
+  "task": "P0-06.1",
+  "branch": "fix/p0-06-1-character-test-context",
+  "baseSha": "1ae69a0fb7a13cfd2cbc9ab5394cf376497abdc1",
+  "initialSha": "92e9f3b8c4b3aa5515a1ed1692b801435783cec6",
+  "verifiedCodeAndTestSha": "dbd3b99c300b12407dad5b5c36358ce879c6c1c6",
+  "productionCodeChanged": false,
+  "productionFixRequired": false,
+  "originalBusinessAssertionsPreserved": true,
+  "realModelRequests": 0,
+  "realQqMessages": 0,
+  "results": [
+    {
+      "command": "node test/character-reliability.mjs",
+      "testedSha": "92e9f3b8c4b3aa5515a1ed1692b801435783cec6",
+      "exitCode": 0,
+      "passed": 19,
+      "failed": 0
+    },
+    {
+      "command": "npm.cmd run test:p0",
+      "testedSha": "92e9f3b8c4b3aa5515a1ed1692b801435783cec6",
+      "exitCode": 0,
+      "passed": 184,
+      "failed": 0
+    },
+    {
+      "command": "node test/character-reliability.mjs",
+      "testedSha": "dbd3b99c300b12407dad5b5c36358ce879c6c1c6",
+      "exitCode": 0,
+      "passed": 19,
+      "failed": 0
+    },
+    {
+      "command": "npm.cmd run test:p0",
+      "testedSha": "dbd3b99c300b12407dad5b5c36358ce879c6c1c6",
+      "exitCode": 0,
+      "passed": 184,
+      "failed": 0,
+      "suites": {
+        "p0-isolated": 108,
+        "memory-privacy-regression": 45,
+        "model-reliability-regression": 17,
+        "message-context-regression": 14
+      }
+    },
+    {
+      "command": "node test/visual-memory-provisional-vision.mjs",
+      "testedSha": "dbd3b99c300b12407dad5b5c36358ce879c6c1c6",
+      "exitCode": 0,
+      "passed": 11,
+      "failed": 0
+    },
+    {
+      "command": "node test/visual-memory-provisional-store.mjs",
+      "testedSha": "dbd3b99c300b12407dad5b5c36358ce879c6c1c6",
+      "exitCode": 0,
+      "passed": 55,
+      "countKind": "checks"
+    },
+    {
+      "command": "node test/visual-memory-provisional-learning.mjs",
+      "testedSha": "dbd3b99c300b12407dad5b5c36358ce879c6c1c6",
+      "exitCode": 0,
+      "passed": 9,
+      "failed": 0
+    },
+    {
+      "command": "node test/image-exchange-replay.mjs",
+      "testedSha": "dbd3b99c300b12407dad5b5c36358ce879c6c1c6",
+      "exitCode": 0,
+      "passed": 16,
+      "countKind": "scenarios"
+    }
+  ],
+  "notExecuted": [
+    {
+      "command": "node test/character-real-replay.mjs",
+      "reason": "Optional synthetic replay fixture was unavailable"
+    },
+    {
+      "command": "node test/character-real-samples.mjs --run-real",
+      "reason": "Optional external-model sampling was outside this synthetic regression"
+    }
+  ],
+  "publishedLogPaths": false,
+  "publishedMachineTimestamps": false
+}

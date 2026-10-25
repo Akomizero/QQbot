@@ -106,7 +106,8 @@ export function saveMemberImpression(groupId, userId, profile, expectedRevision)
     ids.add(item.id); const previous = old.facts.find(fact => fact.id === item.id);
     const restoring = previous?.archivedAt && item.enabled && item.reviewStatus === "approved";
     return { ...previous, id: item.id, kind: item.kind, topic: item.topic.trim(), content: item.content.trim(), tags: [...new Set(item.tags.map(tag => tag.trim()))],
-      replyAllowed: item.replyAllowed === true, replyContentHash: item.replyAllowed === true ? replyContentHash(item.content.trim()) : null,
+      replyAllowed: item.replyAllowed === true && (!previous || previous.content === item.content.trim()),
+      replyContentHash: item.replyAllowed === true && (!previous || previous.content === item.content.trim()) ? replyContentHash(item.content.trim()) : null,
       reviewStatus: item.reviewStatus, enabled: item.reviewStatus === "approved" && item.enabled, origin: previous?.origin ?? "manual", decision: item.reviewStatus === "candidate" ? null : item.reviewStatus,
       ...(restoring ? { archivedAt: null, archiveReason: null, mergedInto: null, stale: false, supersededAt: null, supersededBy: null, supersedesId: null } : {}),
       evidenceRefs: previous?.evidenceRefs ?? [], createdAt: previous?.createdAt ?? now, updatedAt: now };

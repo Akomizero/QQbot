@@ -18,6 +18,7 @@ import { prepareForwardReading } from "./forward-reading.js";
 import { extractBilibiliReference } from "./bilibili-video.js";
 import { readLlmSettings } from "./llm-settings-store.js";
 import { ensureGroupPersonas, settingsForGroup } from "./group-personas.js";
+import { withReplyMemory } from './memory-use-guard.js';
 import { createOneBotBridge } from "./onebot.js";
 import { recordProactiveReply, reserveProactiveEvaluation, recordProactiveWaiting, acknowledgeGroupReply, recordExternalProactiveReply } from "./proactive-chat-state.js";
 import { acknowledgeVideoDiscoveryReply, startVideoDiscovery } from "./video-discovery.js";
@@ -458,14 +459,14 @@ async function evaluateProactiveGroupTurn(groupId, sendMessage, config) {
       dailyLimit: latestSettings.proactiveDailyLimit,
     });
     if (!canReply) return;
-    const sent = await sendMessage("send_msg", {
+    const sent = await withReplyMemory(result,{scope:'group',groupId},()=>sendMessage("send_msg", {
       message_type: "group",
       group_id: groupId,
       message: result.reply,
       auto_escape: true,
     }, () => passiveGroupContexts.get(groupId)?.updatedAt === evaluatedContextAt && readLlmSettings().proactiveChatEnabled
-      && (!result.groupPersonaRevision || settingsForGroup(readLlmSettings(), groupId).groupPersonaRevision === result.groupPersonaRevision));
-    if (!sent?.cancelled) {
+      && (!result.groupPersonaRevision || settingsForGroup(readLlmSettings(), groupId).groupPersonaRevision === result.groupPersonaRevision)));
+    if (sent && !sent.cancelled) {
       rememberGroupLine({ groupId, userId: "bot", text: result.reply, isBot: true, messageId: sent?.message_id });
       if (latestSettings.proactivePauseWhenIgnored) recordProactiveWaiting({ groupId, now: Date.now(), text: result.reply, messageId: sent?.message_id });
     }
@@ -875,11 +876,12 @@ async function handleAuthorizedMessage(event, { sendMessage }, config, authorize
         searchApiKey: config.searchApiKey,
         settings,
         userId: `${authorized.scope}:${authorized.userId}`,
+        groupId: authorized.scope==='group'?authorized.groupId:null,
         senderQQId: authorized.userId,
         userMessage: authorized.content,
       });
       if (result.reply) {
-        try { await sendText(result.reply); } catch {}
+        try { await withReplyMemory(result,authorized.scope==='group'?{scope:'group',groupId:authorized.groupId}:{scope:'private',userId:authorized.userId},()=>sendText(result.reply)); } catch {}
       }
       return;
     }

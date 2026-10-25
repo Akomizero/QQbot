@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash, randomUUID } from 'node:crypto';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const storePath = resolve(projectRoot, "data", "llm-settings.json");
@@ -267,11 +268,21 @@ export function readLlmSettings() {
   return normalizeLlmSettings(parsed.settings);
 }
 
-export function writeLlmSettings(settings) {
+export function llmSettingsRevision() {
+  try { return createHash('sha256').update(readFileSync(storePath)).digest('hex'); }
+  catch (error) { if(error.code==='ENOENT') return null; throw error; }
+}
+
+export function writeLlmSettings(settings, expectedRevision) {
+  if (expectedRevision !== undefined && expectedRevision !== llmSettingsRevision()) throw Object.assign(new Error('模型设置刚有更新，请重新读取后再保存。'),{statusCode:409});
   const normalized = normalizeLlmSettings(settings);
+  let previous;
+  try { previous=JSON.parse(readFileSync(storePath,'utf8')).settings; }
+  catch (error) { if(error.code!=='ENOENT') throw error; }
+  if(previous && previous.memory!==normalized.memory){normalized.memoryReplyEnabled=false;normalized.memoryReplyUserIds=[];}
   ensureStoreDirectory();
   const tempPath = `${storePath}.${process.pid}.tmp`;
-  writeFileSync(tempPath, `${JSON.stringify({ version: 1, settings: normalized }, null, 2)}\n`, "utf8");
+  writeFileSync(tempPath, `${JSON.stringify({ version: 1, revision: randomUUID(), settings: normalized }, null, 2)}\n`, "utf8");
   renameSync(tempPath, storePath);
   return normalized;
 }
